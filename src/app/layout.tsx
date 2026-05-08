@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Website Clone",
-  description: "Pixel-perfect website clone",
+  title: "Nova Studio — AI-Powered Design Platform",
+  description:
+    "Transform your ideas into stunning designs with the power of AI. Describe what you need, and watch it come to life in seconds.",
 };
 
 export default function RootLayout({
