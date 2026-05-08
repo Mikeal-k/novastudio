@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
+  { label: "创作", href: "/create" },
   { label: "功能", href: "#features" },
   { label: "展示", href: "#showcase" },
   { label: "工作原理", href: "#how-it-works" },
