@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +25,7 @@ import {
   ImageUp,
   FileText,
   AlertCircle,
+  Play,
 } from "lucide-react";
 
 // ─── Type definitions ───────────────────────────────────────────────────────
@@ -60,7 +62,7 @@ const models: ModelOption[] = [
     cost: 30,
     supportedOutputs: ["video"],
     generateLabel: () => "生成视频",
-    resultMessage: () => "视频草稿已生成",
+    resultMessage: () => "视频已生成",
   },
   {
     id: "grok-imagine",
@@ -151,6 +153,10 @@ interface RecentGeneration {
   timestamp: string;
   resultMessage: string;
   cost: number;
+  /** Real video URL from Seedance API (only for seedance-2) */
+  videoUrl?: string;
+  /** Cover image URL from Seedance API (only for seedance-2) */
+  coverUrl?: string;
 }
 
 // ─── Credit packages ────────────────────────────────────────────────────────
@@ -160,6 +166,53 @@ const creditPackages = [
   { name: "标准包", price: "¥49.9", credits: 300, popular: true },
   { name: "专业包", price: "¥99.9", credits: 800, popular: false },
 ];
+
+// ─── Video Preview Modal ─────────────────────────────────────────────────────
+
+function VideoPreviewModal({
+  videoUrl,
+  onClose,
+}: {
+  videoUrl: string;
+  onClose: () => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleEsc);
+    return () => document.removeEventListener("keydown", handleEsc);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-3xl overflow-hidden rounded-2xl border border-border/40 bg-card shadow-2xl">
+        <button
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          controls
+          autoPlay
+          className="w-full aspect-video bg-black"
+        >
+          您的浏览器不支持视频播放
+        </video>
+      </div>
+    </div>
+  );
+}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -177,9 +230,22 @@ export default function CreatePage() {
   const [selectedClarity, setSelectedClarity] = useState("标准");
   const [showBuyToast, setShowBuyToast] = useState(false);
   const [promptError, setPromptError] = useState("");
+  const [generationError, setGenerationError] = useState("");
+  const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
 
   const selectedModel = models.find((m) => m.id === selectedModelId)!;
+
   // Reset output type when model changes if the model doesn't support current type
   const handleModelSelect = useCallback(
     (modelId: string) => {
@@ -188,9 +254,117 @@ export default function CreatePage() {
       if (!model.supportedOutputs.includes(outputType)) {
         setOutputType(model.supportedOutputs[0]);
       }
+      setGenerationError("");
     },
     [outputType]
   );
+
+  // ── Seedance real generation ─────────────────────────────────────────────
+
+  const startSeedanceGeneration = useCallback(
+    async (promptText: string) => {
+      setGenerationError("");
+
+      try {
+        // Step 1: Submit the task
+        const submitRes = await fetch("/api/generate-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: promptText,
+            aspectRatio,
+            duration: videoDuration,
+          }),
+        });
+
+        const submitData = await submitRes.json();
+
+        if (!submitData.success || !submitData.taskId) {
+          throw new Error(submitData.error || "Failed to submit video generation task");
+        }
+
+        const taskId: string = submitData.taskId;
+
+        // Step 2: Poll for results
+        const poll = async () => {
+          try {
+            const pollRes = await fetch(`/api/generate-video/${taskId}`);
+            const pollData = await pollRes.json();
+
+            if (!pollData.success) {
+              throw new Error(pollData.error || "Failed to query task status");
+            }
+
+            if (pollData.status === "succeeded") {
+              // Stop polling
+              if (pollingRef.current) {
+                clearInterval(pollingRef.current);
+                pollingRef.current = null;
+              }
+
+              const gen: RecentGeneration = {
+                id: Date.now(),
+                modelName: "Seedance 2.0",
+                outputType: "video",
+                prompt: promptText,
+                timestamp: new Date().toLocaleTimeString("zh-CN", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }),
+                resultMessage: "视频已生成",
+                cost: 30,
+                videoUrl: pollData.videoUrl ?? undefined,
+                coverUrl: pollData.coverUrl ?? undefined,
+              };
+
+              setRecentGenerations((prev) => [gen, ...prev]);
+              setIsGenerating(false);
+              setPrompt("");
+
+              // Scroll to recent projects
+              requestAnimationFrame(() => {
+                const el = document.getElementById("recent-projects");
+                if (el) {
+                  el.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              });
+            } else if (pollData.status === "failed") {
+              if (pollingRef.current) {
+                clearInterval(pollingRef.current);
+                pollingRef.current = null;
+              }
+              setIsGenerating(false);
+              setGenerationError(pollData.error || "视频生成失败，请重试");
+            }
+            // else: still running/pending, continue polling
+          } catch (pollErr) {
+            if (pollingRef.current) {
+              clearInterval(pollingRef.current);
+              pollingRef.current = null;
+            }
+            setIsGenerating(false);
+            setGenerationError(
+              pollErr instanceof Error ? pollErr.message : "查询任务状态失败"
+            );
+          }
+        };
+
+        // Poll every 3 seconds
+        pollingRef.current = setInterval(poll, 3000);
+
+        // Also poll immediately
+        await poll();
+      } catch (err) {
+        setIsGenerating(false);
+        setGenerationError(
+          err instanceof Error ? err.message : "提交视频生成任务失败"
+        );
+      }
+    },
+    [aspectRatio, videoDuration]
+  );
+
+  // ── Handle Generate ──────────────────────────────────────────────────────
 
   const handleGenerate = useCallback(() => {
     if (isGenerating) return;
@@ -202,9 +376,16 @@ export default function CreatePage() {
     }
 
     setPromptError("");
+    setGenerationError("");
     setIsGenerating(true);
 
-    // Simulate generation
+    // Seedance 2.0 → real API
+    if (selectedModel.id === "seedance-2") {
+      startSeedanceGeneration(prompt.trim());
+      return;
+    }
+
+    // All other models → mock
     setTimeout(() => {
       const result = selectedModel.resultMessage(outputType);
       const gen: RecentGeneration = {
@@ -231,7 +412,7 @@ export default function CreatePage() {
         }
       });
     }, 1500);
-  }, [prompt, isGenerating, selectedModel, outputType]);
+  }, [prompt, isGenerating, selectedModel, outputType, startSeedanceGeneration]);
 
   const handleBuyClick = () => {
     setShowBuyToast(true);
@@ -240,6 +421,14 @@ export default function CreatePage() {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* ── Video Preview Modal ──────────────────────────────────────── */}
+      {previewVideoUrl && (
+        <VideoPreviewModal
+          videoUrl={previewVideoUrl}
+          onClose={() => setPreviewVideoUrl(null)}
+        />
+      )}
+
       {/* ── Upgrade Banner ──────────────────────────────────────────── */}
       <div className="relative overflow-hidden bg-gradient-to-r from-accent-violet/20 via-accent-violet/10 to-accent-violet/5 border-b border-accent-violet/10">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(124,58,237,0.15),transparent_60%)]" />
@@ -391,6 +580,20 @@ export default function CreatePage() {
                 积分
               </span>
             </div>
+
+            {/* Generation error */}
+            {generationError && (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-2.5 text-xs text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{generationError}</span>
+                <button
+                  onClick={() => setGenerationError("")}
+                  className="ml-auto shrink-0 text-red-400/60 transition-colors hover:text-red-400"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </section>
 
           {/* ── Model Chips ──────────────────────────────────────────── */}
@@ -590,9 +793,29 @@ export default function CreatePage() {
                   key={gen.id}
                   className="group animate-fade-in-scale flex flex-col rounded-xl border border-border/40 bg-gradient-to-br from-card/70 to-card/40 p-4 backdrop-blur-sm transition-all duration-200 hover:border-accent-violet/20 hover:shadow-lg hover:shadow-accent-violet/5"
                 >
-                  {/* Thumbnail placeholder */}
-                  <div className="mb-3 flex aspect-[4/3] items-center justify-center rounded-lg bg-gradient-to-br from-accent-violet/10 to-accent-violet/5">
-                    {gen.outputType === "image" ? (
+                  {/* Thumbnail */}
+                  <div className="relative mb-3 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-accent-violet/10 to-accent-violet/5">
+                    {gen.coverUrl ? (
+                      <Image
+                        src={gen.coverUrl}
+                        alt={gen.prompt}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    ) : gen.videoUrl ? (
+                      <>
+                        <video
+                          src={gen.videoUrl}
+                          className="h-full w-full object-cover"
+                          muted
+                          preload="metadata"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                          <Play className="h-8 w-8 text-white/80" />
+                        </div>
+                      </>
+                    ) : gen.outputType === "image" ? (
                       <ImageIcon className="h-8 w-8 text-accent-violet/30" />
                     ) : (
                       <Video className="h-8 w-8 text-accent-violet/30" />
@@ -614,15 +837,44 @@ export default function CreatePage() {
 
                   {/* Actions */}
                   <div className="mt-2 flex items-center gap-1.5 border-t border-border/20 pt-2">
-                    <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
-                      <Download className="h-3 w-3" />
-                      下载
-                    </button>
+                    {gen.videoUrl ? (
+                      <>
+                        <button
+                          onClick={() => setPreviewVideoUrl(gen.videoUrl!)}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                        >
+                          <Play className="h-3 w-3" />
+                          预览
+                        </button>
+                        <a
+                          href={gen.videoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                        >
+                          <Download className="h-3 w-3" />
+                          下载
+                        </a>
+                      </>
+                    ) : (
+                      <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
+                        <Download className="h-3 w-3" />
+                        下载
+                      </button>
+                    )}
                     <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
                       <Repeat className="h-3 w-3" />
                       再次生成
                     </button>
-                    <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
+                    <button
+                      onClick={() => {
+                        if (gen.videoUrl) {
+                          setGenerationError("发布功能即将上线，敬请期待");
+                        }
+                      }}
+                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                    >
                       <Send className="h-3 w-3" />
                       用于发布
                     </button>
