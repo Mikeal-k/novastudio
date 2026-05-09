@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { getGenerationCost } from "@/lib/seedance";
 import {
   Sparkles,
   Image as ImageIcon,
@@ -37,7 +38,6 @@ interface ModelOption {
   name: string;
   category: string;
   description: string;
-  cost: number;
   supportedOutputs: OutputType[];
   generateLabel: (outputType: OutputType) => string;
   resultMessage: (outputType: OutputType) => string;
@@ -49,7 +49,6 @@ const models: ModelOption[] = [
     name: "GPT Image 2",
     category: "图片生成",
     description: "适合商品图、海报、封面、分镜图",
-    cost: 5,
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
@@ -59,7 +58,6 @@ const models: ModelOption[] = [
     name: "Seedance 2.0",
     category: "视频生成",
     description: "适合文生视频、图生视频、短视频广告",
-    cost: 30,
     supportedOutputs: ["video"],
     generateLabel: () => "生成视频",
     resultMessage: () => "视频已生成",
@@ -69,7 +67,6 @@ const models: ModelOption[] = [
     name: "Grok Imagine",
     category: "图片/视频创意生成",
     description: "适合创意图片、短视频灵感、图生视频和社媒内容",
-    cost: 25,
     supportedOutputs: ["image", "video"],
     generateLabel: (outputType: OutputType) =>
       outputType === "image" ? "生成图片" : "生成视频",
@@ -81,7 +78,6 @@ const models: ModelOption[] = [
     name: "Nano Banana Pro",
     category: "图片增强",
     description: "适合图片优化、风格化、细节修复",
-    cost: 8,
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
@@ -91,7 +87,6 @@ const models: ModelOption[] = [
     name: "Design",
     category: "设计模式",
     description: "适合海报、品牌视觉、落地页概念图",
-    cost: 10,
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
@@ -101,7 +96,6 @@ const models: ModelOption[] = [
     name: "Branding",
     category: "品牌模式",
     description: "适合生成统一风格的一组视觉素材",
-    cost: 15,
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
@@ -111,7 +105,6 @@ const models: ModelOption[] = [
     name: "E-Commerce",
     category: "电商模式",
     description: "适合商品主图、详情图、带货素材",
-    cost: 12,
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
@@ -121,7 +114,6 @@ const models: ModelOption[] = [
     name: "Video",
     category: "视频模式",
     description: "适合短视频脚本画面、广告视频草案",
-    cost: 20,
     supportedOutputs: ["video"],
     generateLabel: () => "生成视频",
     resultMessage: () => "视频草稿已生成",
@@ -166,6 +158,10 @@ const creditPackages = [
   { name: "标准包", price: "¥49.9", credits: 300, popular: true },
   { name: "专业包", price: "¥99.9", credits: 800, popular: false },
 ];
+
+// ─── Default credits for new users ──────────────────────────────────────────
+
+const DEFAULT_CREDITS = 30;
 
 // ─── Video Preview Modal ─────────────────────────────────────────────────────
 
@@ -232,6 +228,7 @@ export default function CreatePage() {
   const [promptError, setPromptError] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+  const [credits, setCredits] = useState(DEFAULT_CREDITS);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -245,6 +242,19 @@ export default function CreatePage() {
   }, []);
 
   const selectedModel = models.find((m) => m.id === selectedModelId)!;
+
+  // ── Dynamic cost calculation ─────────────────────────────────────────────
+
+  const currentCost = useMemo(() => {
+    return getGenerationCost({
+      modelId: selectedModelId,
+      outputType,
+      duration: videoDuration,
+      quality: selectedClarity,
+    });
+  }, [selectedModelId, outputType, videoDuration, selectedClarity]);
+
+  const isInsufficientCredits = credits < currentCost;
 
   // Reset output type when model changes if the model doesn't support current type
   const handleModelSelect = useCallback(
@@ -264,6 +274,20 @@ export default function CreatePage() {
   const startSeedanceGeneration = useCallback(
     async (promptText: string) => {
       setGenerationError("");
+
+      // Double-check credits before calling API
+      const cost = getGenerationCost({
+        modelId: "seedance-2",
+        outputType: "video",
+        duration: videoDuration,
+        quality: selectedClarity,
+      });
+
+      if (credits < cost) {
+        setIsGenerating(false);
+        setGenerationError(`积分不足，本次需要 ${cost} 积分，请先购买积分`);
+        return;
+      }
 
       try {
         // Step 1: Submit the task
@@ -302,6 +326,9 @@ export default function CreatePage() {
                 pollingRef.current = null;
               }
 
+              // Deduct credits only on successful generation
+              setCredits((prev) => prev - cost);
+
               const gen: RecentGeneration = {
                 id: Date.now(),
                 modelName: "Seedance 2.0",
@@ -312,7 +339,7 @@ export default function CreatePage() {
                   minute: "2-digit",
                 }),
                 resultMessage: "视频已生成",
-                cost: 30,
+                cost,
                 videoUrl: pollData.videoUrl ?? undefined,
                 coverUrl: pollData.coverUrl ?? undefined,
               };
@@ -334,6 +361,7 @@ export default function CreatePage() {
                 pollingRef.current = null;
               }
               setIsGenerating(false);
+              // Do NOT deduct credits on failure
               setGenerationError(pollData.error || "视频生成失败，请重试");
             }
             // else: still running/pending, continue polling
@@ -361,7 +389,7 @@ export default function CreatePage() {
         );
       }
     },
-    [aspectRatio, videoDuration]
+    [aspectRatio, videoDuration, selectedClarity, credits]
   );
 
   // ── Handle Generate ──────────────────────────────────────────────────────
@@ -375,6 +403,12 @@ export default function CreatePage() {
       return;
     }
 
+    // Check if user has enough credits
+    if (isInsufficientCredits) {
+      setGenerationError(`当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`);
+      return;
+    }
+
     setPromptError("");
     setGenerationError("");
     setIsGenerating(true);
@@ -385,7 +419,7 @@ export default function CreatePage() {
       return;
     }
 
-    // All other models → mock
+    // All other models → mock (deduct credits immediately for mock)
     setTimeout(() => {
       const result = selectedModel.resultMessage(outputType);
       const gen: RecentGeneration = {
@@ -398,8 +432,9 @@ export default function CreatePage() {
           minute: "2-digit",
         }),
         resultMessage: result,
-        cost: selectedModel.cost,
+        cost: currentCost,
       };
+      setCredits((prev) => prev - currentCost);
       setRecentGenerations((prev) => [gen, ...prev]);
       setIsGenerating(false);
       setPrompt("");
@@ -412,7 +447,15 @@ export default function CreatePage() {
         }
       });
     }, 1500);
-  }, [prompt, isGenerating, selectedModel, outputType, startSeedanceGeneration]);
+  }, [
+    prompt,
+    isGenerating,
+    selectedModel,
+    outputType,
+    startSeedanceGeneration,
+    isInsufficientCredits,
+    currentCost,
+  ]);
 
   const handleBuyClick = () => {
     setShowBuyToast(true);
@@ -467,7 +510,7 @@ export default function CreatePage() {
             <div className="flex items-center gap-1.5 rounded-full border border-border/50 bg-card/60 px-3 py-1.5 text-xs font-medium text-text-secondary backdrop-blur-sm">
               <Coins className="h-3.5 w-3.5 text-amber-400" />
               <span>当前积分：</span>
-              <span className="text-amber-400">80</span>
+              <span className="text-amber-400">{credits}</span>
             </div>
 
             <Button
@@ -548,7 +591,7 @@ export default function CreatePage() {
 
                 <Button
                   onClick={handleGenerate}
-                  disabled={!prompt.trim() || isGenerating}
+                  disabled={!prompt.trim() || isGenerating || isInsufficientCredits}
                   size="lg"
                   className={cn(
                     "gap-2 bg-gradient-to-r from-accent-violet to-accent-violet-light text-white shadow-lg transition-all duration-200",
@@ -560,6 +603,11 @@ export default function CreatePage() {
                     <>
                       <RefreshCw className="h-4 w-4 animate-spin" />
                       {outputType === "image" ? "图片生成中..." : "视频生成中..."}
+                    </>
+                  ) : isInsufficientCredits ? (
+                    <>
+                      <Coins className="h-4 w-4" />
+                      积分不足
                     </>
                   ) : (
                     <>
@@ -576,13 +624,23 @@ export default function CreatePage() {
             <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-text-muted">
               <Coins className="h-3 w-3 text-amber-400/70" />
               <span>
-                本次消耗：<span className="text-amber-400">{selectedModel.cost}</span>{" "}
+                本次消耗：<span className="text-amber-400">{currentCost}</span>{" "}
                 积分
               </span>
             </div>
 
+            {/* Insufficient credits warning */}
+            {isInsufficientCredits && (
+              <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-red-400">
+                <AlertCircle className="h-3 w-3" />
+                <span>
+                  当前积分不足，本次需要 {currentCost} 积分，请先购买积分
+                </span>
+              </div>
+            )}
+
             {/* Generation error */}
-            {generationError && (
+            {generationError && !isInsufficientCredits && (
               <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-2.5 text-xs text-red-400">
                 <AlertCircle className="h-4 w-4 shrink-0" />
                 <span>{generationError}</span>
@@ -602,25 +660,33 @@ export default function CreatePage() {
               选择模型
             </h2>
             <div className="flex flex-wrap gap-2">
-              {models.map((model) => (
-                <button
-                  key={model.id}
-                  onClick={() => handleModelSelect(model.id)}
-                  className={cn(
-                    "rounded-xl border px-4 py-2.5 text-sm font-medium transition-all duration-200",
-                    selectedModelId === model.id
-                      ? "border-accent-violet/40 bg-accent-violet/15 text-accent-violet-light shadow-sm shadow-accent-violet/5"
-                      : "border-border/60 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:bg-accent-violet/5 hover:text-foreground"
-                  )}
-                >
-                  <span className="flex items-center gap-2">
-                    {model.name}
-                    <span className="text-[10px] opacity-60">
-                      {model.cost}pt
+              {models.map((model) => {
+                const modelCost = getGenerationCost({
+                  modelId: model.id,
+                  outputType: model.supportedOutputs[0],
+                  duration: videoDuration,
+                  quality: selectedClarity,
+                });
+                return (
+                  <button
+                    key={model.id}
+                    onClick={() => handleModelSelect(model.id)}
+                    className={cn(
+                      "rounded-xl border px-4 py-2.5 text-sm font-medium transition-all duration-200",
+                      selectedModelId === model.id
+                        ? "border-accent-violet/40 bg-accent-violet/15 text-accent-violet-light shadow-sm shadow-accent-violet/5"
+                        : "border-border/60 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:bg-accent-violet/5 hover:text-foreground"
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      {model.name}
+                      <span className="text-[10px] opacity-60">
+                        {modelCost}pt
+                      </span>
                     </span>
-                  </span>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Selected model info */}
@@ -632,7 +698,7 @@ export default function CreatePage() {
               <span>{selectedModel.category}</span>
               <span className="text-text-muted">·</span>
               <span>
-                消耗 <span className="text-amber-400">{selectedModel.cost}</span>{" "}
+                消耗 <span className="text-amber-400">{currentCost}</span>{" "}
                 积分
               </span>
               <span className="text-text-muted">·</span>

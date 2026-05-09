@@ -14,6 +14,17 @@
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+export interface GenerationCostParams {
+  /** Model identifier (e.g. "seedance-2", "grok-imagine", "gpt-image-2") */
+  modelId: string;
+  /** Output type: "image" or "video" */
+  outputType: "image" | "video";
+  /** Video duration in seconds (only applies to video models) */
+  duration?: number;
+  /** Quality level: "标准", "高清", "超清" (only applies to video models) */
+  quality?: string;
+}
+
 export interface SeedanceSubmitRequest {
   /** Text prompt describing the desired video */
   prompt: string;
@@ -108,6 +119,72 @@ function mapDuration(duration: number): number {
     Math.abs(curr - duration) < Math.abs(prev - duration) ? curr : prev
   );
   return nearest;
+}
+
+// ─── Generation Cost Calculation ────────────────────────────────────────────
+
+/**
+ * Base credit costs for each model (image output).
+ * For video models, this is the base cost for 10s + 标准 quality.
+ */
+const MODEL_BASE_COST: Record<string, number> = {
+  "gpt-image-2": 5,
+  "nano-banana-pro": 8,
+  "design": 10,
+  "branding": 15,
+  "ecommerce": 12,
+  "seedance-2": 30,
+  "grok-imagine": 25,
+  "video": 20,
+};
+
+/**
+ * Duration multiplier for video generation.
+ */
+const DURATION_MULTIPLIER: Record<number, number> = {
+  5: 0.6,
+  10: 1,
+  15: 1.5,
+  30: 3,
+};
+
+/**
+ * Quality multiplier for video generation.
+ */
+const QUALITY_MULTIPLIER: Record<string, number> = {
+  "标准": 1,
+  "高清": 1.5,
+  "超清": 2,
+};
+
+/**
+ * Calculate the credit cost for a generation request.
+ *
+ * For image models, returns the base cost directly.
+ * For video models, applies duration and quality multipliers:
+ *   Math.ceil(baseCost * durationMultiplier * qualityMultiplier)
+ *
+ * @example
+ * getGenerationCost({ modelId: "seedance-2", outputType: "video", duration: 15, quality: "高清" })
+ * // => Math.ceil(30 * 1.5 * 1.5) = 68
+ */
+export function getGenerationCost(params: GenerationCostParams): number {
+  const { modelId, outputType, duration, quality } = params;
+  const baseCost = MODEL_BASE_COST[modelId] ?? 0;
+
+  // Image models: no duration/quality multipliers
+  if (outputType === "image") {
+    return baseCost;
+  }
+
+  // Video models: apply multipliers
+  const dur = duration ?? 10;
+  const q = quality ?? "标准";
+
+  const durMul = DURATION_MULTIPLIER[dur] ?? 1;
+  const qMul = QUALITY_MULTIPLIER[q] ?? 1;
+
+  return Math.ceil(baseCost * durMul * qMul);
 }
 
 // ─── API calls ───────────────────────────────────────────────────────────────
