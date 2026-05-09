@@ -3,9 +3,11 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getGenerationCost } from "@/lib/seedance";
+import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import {
   Sparkles,
   Image as ImageIcon,
@@ -27,6 +29,12 @@ import {
   FileText,
   AlertCircle,
   Play,
+  LogOut,
+  Loader2,
+  User,
+  MessageCircle,
+  Copy,
+  Check,
 } from "lucide-react";
 
 // ─── Type definitions ───────────────────────────────────────────────────────
@@ -135,33 +143,28 @@ const styles = [
 ];
 const clarities = ["标准", "高清", "超清"];
 
-// ─── Recent generation type ──────────────────────────────────────────────────
+// ─── Recent generation type (from DB) ───────────────────────────────────────
 
-interface RecentGeneration {
-  id: number;
-  modelName: string;
-  outputType: OutputType;
+interface DBGeneration {
+  id: string;
+  model: string;
   prompt: string;
-  timestamp: string;
-  resultMessage: string;
+  output_type: string;
+  status: string;
   cost: number;
-  /** Real video URL from Seedance API (only for seedance-2) */
-  videoUrl?: string;
-  /** Cover image URL from Seedance API (only for seedance-2) */
-  coverUrl?: string;
+  video_url: string | null;
+  cover_url: string | null;
+  error: string | null;
+  created_at: string;
 }
 
 // ─── Credit packages ────────────────────────────────────────────────────────
 
 const creditPackages = [
-  { name: "体验包", price: "¥19.9", credits: 100, popular: false },
-  { name: "标准包", price: "¥49.9", credits: 300, popular: true },
-  { name: "专业包", price: "¥99.9", credits: 800, popular: false },
+  { name: "体验包", price: "¥29.9", credits: 150, popular: false, description: "可生成 1 条 10 秒标准视频" },
+  { name: "标准包", price: "¥69.9", credits: 400, popular: true, description: "适合连续生成 2-4 条短视频" },
+  { name: "专业包", price: "¥199", credits: 1200, popular: false, description: "适合批量生成短视频素材" },
 ];
-
-// ─── Default credits for new users ──────────────────────────────────────────
-
-const DEFAULT_CREDITS = 30;
 
 // ─── Video Preview Modal ─────────────────────────────────────────────────────
 
@@ -210,27 +213,409 @@ function VideoPreviewModal({
   );
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Login / Register Modal ────────────────────────────────────────────────
+
+function LoginModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    if (open) {
+      document.addEventListener("keydown", handleEsc);
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+      document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-sm animate-fade-in-scale">
+        {/* Glow */}
+        <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-br from-accent-violet/30 via-transparent to-accent-violet/10 opacity-70 blur-xl" />
+
+        <div className="relative rounded-2xl border border-border/50 bg-card/80 p-8 backdrop-blur-xl shadow-2xl shadow-black/20 text-center">
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {/* Icon */}
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5">
+            <Sparkles className="h-7 w-7 text-accent-violet-light" />
+          </div>
+
+          {/* Title */}
+          <h2 className="text-xl font-bold text-foreground">
+            登录后开始生成
+          </h2>
+
+          {/* Description */}
+          <p className="mt-3 text-sm text-text-secondary leading-relaxed">
+            登录后即可获得 30 积分，并保存你的生成记录。生成视频会根据时长和清晰度扣除积分。
+          </p>
+
+          {/* Buttons */}
+          <div className="mt-6 flex flex-col gap-3">
+            <Link href="/auth" className="w-full">
+              <Button className="w-full gap-2 bg-gradient-to-r from-accent-violet to-accent-violet-light text-white shadow-lg transition-all duration-200 hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl">
+                登录 / 注册
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
+            <button
+              onClick={onClose}
+              className="w-full rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+            >
+              继续浏览
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Loading State ──────────────────────────────────────────────────────────
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex flex-col items-center gap-3">
+        <Loader2 className="h-8 w-8 animate-spin text-accent-violet-light" />
+        <p className="text-sm text-text-muted">正在加载...</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Purchase Modal ─────────────────────────────────────────────────────────
+
+interface PurchaseResult {
+  orderId: string;
+  packageName: string;
+  amountYuan: number;
+  credits: number;
+}
+
+function PurchaseModal({
+  open,
+  onClose,
+  purchaseLoading,
+  purchaseResult,
+  purchaseError,
+  onSelectPackage,
+  onCopyOrderId,
+  copied,
+}: {
+  open: boolean;
+  onClose: () => void;
+  purchaseLoading: string | null;
+  purchaseResult: PurchaseResult | null;
+  purchaseError: string;
+  onSelectPackage: (packageId: string) => void;
+  onCopyOrderId: (orderId: string) => void;
+  copied: boolean;
+}) {
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    if (open) {
+      document.addEventListener("keydown", handleEsc);
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+      document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const packages = [
+    { id: "experience", name: "体验包", price: "¥29.9", credits: 150, popular: false },
+    { id: "standard", name: "标准包", price: "¥69.9", credits: 400, popular: true },
+    { id: "pro", name: "专业包", price: "¥199", credits: 1200, popular: false },
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-lg animate-fade-in-scale">
+        {/* Glow */}
+        <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-br from-accent-violet/30 via-transparent to-accent-violet/10 opacity-70 blur-xl" />
+
+        <div className="relative rounded-2xl border border-border/50 bg-card/80 p-6 backdrop-blur-xl shadow-2xl shadow-black/20">
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {purchaseResult ? (
+            /* ── Success State ─────────────────────────────────────── */
+            <div className="text-center">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-500/20 to-emerald-500/5">
+                <Check className="h-7 w-7 text-emerald-400" />
+              </div>
+              <h2 className="text-lg font-bold text-foreground">订单已创建</h2>
+              <p className="mt-2 text-sm text-text-secondary">
+                请完成付款后，联系客服人工确认到账
+              </p>
+
+              {/* Order details */}
+              <div className="mt-4 rounded-xl border border-border/30 bg-card/50 p-4 text-left text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-text-muted">套餐</span>
+                  <span className="font-medium text-foreground">{purchaseResult.packageName}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">金额</span>
+                  <span className="font-medium text-foreground">¥{purchaseResult.amountYuan}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">积分</span>
+                  <span className="font-medium text-amber-400">{purchaseResult.credits} 积分</span>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-border/20 pt-3">
+                  <span className="text-text-muted">订单号</span>
+                  <button
+                    onClick={() => onCopyOrderId(purchaseResult.orderId)}
+                    disabled={!purchaseResult.orderId}
+                    className="flex items-center gap-1.5 text-xs text-accent-violet-light transition-colors hover:text-accent-violet disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3.5 w-3.5" />
+                        已复制
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        复制
+                      </>
+                    )}
+                    <span className="max-w-[160px] truncate font-mono text-[10px]">
+                      {purchaseResult.orderId || "—"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Contact info */}
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-left text-sm">
+                <div className="flex items-center gap-2 text-amber-400">
+                  <MessageCircle className="h-4 w-4" />
+                  <span className="font-medium">联系客服</span>
+                </div>
+                <p className="mt-1.5 text-xs text-text-secondary">
+                  请扫码或搜索微信号添加客服，发送订单号完成付款。
+                </p>
+                <p className="mt-1 text-xs text-text-muted">
+                  客服微信：<span className="text-text-secondary">请替换为你的微信号</span>
+                </p>
+              </div>
+
+              <button
+                onClick={onClose}
+                className="mt-4 w-full rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+              >
+                关闭
+              </button>
+            </div>
+          ) : (
+            /* ── Package Selection ─────────────────────────────────── */
+            <>
+              <div className="mb-2 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5">
+                  <CreditCard className="h-6 w-6 text-accent-violet-light" />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">购买积分</h2>
+                <p className="mt-1 text-sm text-text-secondary">
+                  选择套餐，创建订单后联系客服付款
+                </p>
+              </div>
+
+              {/* Packages */}
+              <div className="mt-4 grid gap-3">
+                {packages.map((pkg) => (
+                  <button
+                    key={pkg.id}
+                    onClick={() => onSelectPackage(pkg.id)}
+                    disabled={purchaseLoading !== null}
+                    className={`relative flex items-center justify-between rounded-xl border p-4 text-left transition-all duration-200 ${
+                      pkg.popular
+                        ? "border-accent-violet/40 bg-accent-violet/10"
+                        : "border-border/40 bg-card/50 hover:border-accent-violet/20"
+                    } ${purchaseLoading === pkg.id ? "opacity-60" : ""}`}
+                  >
+                    {pkg.popular && (
+                      <div className="absolute -top-2.5 right-3">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-accent-violet to-accent-violet-light px-2.5 py-0.5 text-[10px] font-medium text-white shadow-sm">
+                          <Star className="h-3 w-3" />
+                          推荐
+                        </span>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-sm font-semibold text-foreground">{pkg.name}</span>
+                      <span className="ml-2 text-xs text-text-muted">
+                        {pkg.credits} 积分
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base font-bold text-foreground">{pkg.price}</span>
+                      {purchaseLoading === pkg.id && (
+                        <Loader2 className="h-4 w-4 animate-spin text-accent-violet-light" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Error */}
+              {purchaseError && (
+                <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-2.5 text-xs text-red-400">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  <span>{purchaseError}</span>
+                </div>
+              )}
+
+              <button
+                onClick={onClose}
+                className="mt-4 w-full rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+              >
+                取消
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Component ─────────────────────────────────────────────────────────
 
 export default function CreatePage() {
+  const router = useRouter();
   const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-2");
   const [outputType, setOutputType] = useState<OutputType>("image");
   const [videoDuration, setVideoDuration] = useState<number>(10);
   const [prompt, setPrompt] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [recentGenerations, setRecentGenerations] = useState<RecentGeneration[]>(
-    []
-  );
+  const [recentGenerations, setRecentGenerations] = useState<DBGeneration[]>([]);
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [selectedStyle, setSelectedStyle] = useState("真实质感");
   const [selectedClarity, setSelectedClarity] = useState("标准");
   const [showBuyToast, setShowBuyToast] = useState(false);
+  const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  const [purchaseLoading, setPurchaseLoading] = useState<string | null>(null);
+  const [purchaseResult, setPurchaseResult] = useState<{
+    orderId: string;
+    packageName: string;
+    amountYuan: number;
+    credits: number;
+  } | null>(null);
+  const [purchaseError, setPurchaseError] = useState("");
+  const [copied, setCopied] = useState(false);
   const [promptError, setPromptError] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
-  const [credits, setCredits] = useState(DEFAULT_CREDITS);
+  const [credits, setCredits] = useState(0);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const supabase = createBrowserSupabaseClient();
+
+  // ── Auth check on mount ─────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkAuth() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (cancelled) return;
+
+        if (!user) {
+          setIsLoggedIn(false);
+          setIsLoading(false);
+          return;
+        }
+
+        setIsLoggedIn(true);
+        setUserEmail(user.email ?? null);
+
+        // Fetch profile (credits) and generations
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const token = session?.access_token;
+
+        if (token) {
+          // Fetch credits
+          const meRes = await fetch("/api/me", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const meData = await meRes.json();
+          if (meData.success) {
+            setCredits(meData.profile.credits);
+          }
+
+          // Fetch recent generations
+          const gensRes = await fetch("/api/generations", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const gensData = await gensRes.json();
+          if (gensData.success) {
+            setRecentGenerations(gensData.generations ?? []);
+          }
+        }
+      } catch (err) {
+        console.error("[create] Auth check error:", err);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+
+    checkAuth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [supabase]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -269,11 +654,55 @@ export default function CreatePage() {
     [outputType]
   );
 
+  // ── Get auth token helper ────────────────────────────────────────────────
+
+  const getToken = useCallback(async (): Promise<string | null> => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  }, [supabase]);
+
+  // ── Refresh credits from server ──────────────────────────────────────────
+
+  const refreshCredits = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    const res = await fetch("/api/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (data.success) {
+      setCredits(data.profile.credits);
+    }
+  }, [getToken]);
+
+  // ── Refresh generations from server ──────────────────────────────────────
+
+  const refreshGenerations = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    const res = await fetch("/api/generations", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (data.success) {
+      setRecentGenerations(data.generations ?? []);
+    }
+  }, [getToken]);
+
   // ── Seedance real generation ─────────────────────────────────────────────
 
   const startSeedanceGeneration = useCallback(
     async (promptText: string) => {
       setGenerationError("");
+
+      const token = await getToken();
+      if (!token) {
+        setIsGenerating(false);
+        setGenerationError("认证失败，请重新登录");
+        return;
+      }
 
       // Double-check credits before calling API
       const cost = getGenerationCost({
@@ -285,7 +714,7 @@ export default function CreatePage() {
 
       if (credits < cost) {
         setIsGenerating(false);
-        setGenerationError(`积分不足，本次需要 ${cost} 积分，请先购买积分`);
+        setGenerationError(`真实视频生成成本较高，本次需要 ${cost} 积分。请先购买积分后再生成。`);
         return;
       }
 
@@ -293,11 +722,16 @@ export default function CreatePage() {
         // Step 1: Submit the task
         const submitRes = await fetch("/api/generate-video", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
           body: JSON.stringify({
             prompt: promptText,
             aspectRatio,
             duration: videoDuration,
+            quality: selectedClarity,
+            style: selectedStyle,
           }),
         });
 
@@ -312,7 +746,9 @@ export default function CreatePage() {
         // Step 2: Poll for results
         const poll = async () => {
           try {
-            const pollRes = await fetch(`/api/generate-video/${taskId}`);
+            const pollRes = await fetch(`/api/generate-video/${taskId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
             const pollData = await pollRes.json();
 
             if (!pollData.success) {
@@ -326,25 +762,11 @@ export default function CreatePage() {
                 pollingRef.current = null;
               }
 
-              // Deduct credits only on successful generation
-              setCredits((prev) => prev - cost);
+              // Refresh credits from server (deduction happened server-side)
+              await refreshCredits();
+              // Refresh generations from server
+              await refreshGenerations();
 
-              const gen: RecentGeneration = {
-                id: Date.now(),
-                modelName: "Seedance 2.0",
-                outputType: "video",
-                prompt: promptText,
-                timestamp: new Date().toLocaleTimeString("zh-CN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                }),
-                resultMessage: "视频已生成",
-                cost,
-                videoUrl: pollData.videoUrl ?? undefined,
-                coverUrl: pollData.coverUrl ?? undefined,
-              };
-
-              setRecentGenerations((prev) => [gen, ...prev]);
               setIsGenerating(false);
               setPrompt("");
 
@@ -363,6 +785,8 @@ export default function CreatePage() {
               setIsGenerating(false);
               // Do NOT deduct credits on failure
               setGenerationError(pollData.error || "视频生成失败，请重试");
+              // Refresh generations to get updated status
+              await refreshGenerations();
             }
             // else: still running/pending, continue polling
           } catch (pollErr) {
@@ -389,7 +813,16 @@ export default function CreatePage() {
         );
       }
     },
-    [aspectRatio, videoDuration, selectedClarity, credits]
+    [
+      aspectRatio,
+      videoDuration,
+      selectedClarity,
+      selectedStyle,
+      credits,
+      getToken,
+      refreshCredits,
+      refreshGenerations,
+    ]
   );
 
   // ── Handle Generate ──────────────────────────────────────────────────────
@@ -403,9 +836,19 @@ export default function CreatePage() {
       return;
     }
 
+    // If not logged in, show login modal — do NOT call API or mock
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+
     // Check if user has enough credits
     if (isInsufficientCredits) {
-      setGenerationError(`当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`);
+      if (selectedModel.id === "seedance-2") {
+        setGenerationError(`真实视频生成成本较高，本次需要 ${currentCost} 积分。请先购买积分后再生成。`);
+      } else {
+        setGenerationError(`当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`);
+      }
       return;
     }
 
@@ -419,20 +862,20 @@ export default function CreatePage() {
       return;
     }
 
-    // All other models → mock (deduct credits immediately for mock)
+    // All other models → mock (deduct credits locally for mock)
     setTimeout(() => {
-      const result = selectedModel.resultMessage(outputType);
-      const gen: RecentGeneration = {
-        id: Date.now(),
-        modelName: selectedModel.name,
-        outputType,
+      selectedModel.resultMessage(outputType);
+      const gen: DBGeneration = {
+        id: String(Date.now()),
+        model: selectedModel.name,
         prompt: prompt.trim(),
-        timestamp: new Date().toLocaleTimeString("zh-CN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        resultMessage: result,
+        output_type: outputType,
+        status: "succeeded",
         cost: currentCost,
+        video_url: null,
+        cover_url: null,
+        error: null,
+        created_at: new Date().toISOString(),
       };
       setCredits((prev) => prev - currentCost);
       setRecentGenerations((prev) => [gen, ...prev]);
@@ -455,15 +898,109 @@ export default function CreatePage() {
     startSeedanceGeneration,
     isInsufficientCredits,
     currentCost,
+    isLoggedIn,
   ]);
 
+  // ── Logout ───────────────────────────────────────────────────────────────
+
+  const handleLogout = useCallback(async () => {
+    await supabase.auth.signOut();
+    router.push("/auth");
+  }, [supabase, router]);
+
   const handleBuyClick = () => {
-    setShowBuyToast(true);
-    setTimeout(() => setShowBuyToast(false), 3000);
+    if (!isLoggedIn) {
+      setShowLoginModal(true);
+      return;
+    }
+    setPurchaseResult(null);
+    setPurchaseError("");
+    setShowPurchaseModal(true);
   };
+
+  const handlePurchasePackage = async (packageId: string) => {
+    setPurchaseLoading(packageId);
+    setPurchaseError("");
+    setPurchaseResult(null);
+
+    try {
+      const token = await getToken();
+      if (!token) {
+        setPurchaseError("认证失败，请重新登录");
+        setPurchaseLoading(null);
+        return;
+      }
+
+      const res = await fetch("/api/recharge/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ packageId }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        // Compatible with both data.orderId and data.order.id
+        const orderId = data.orderId || data.order?.id;
+        if (!orderId) {
+          setPurchaseError("订单创建成功但未返回订单号，请刷新后重试");
+        } else {
+          setPurchaseResult({
+            orderId,
+            packageName: data.order?.packageName ?? "",
+            amountYuan: data.order?.amountYuan ?? 0,
+            credits: data.order?.credits ?? 0,
+          });
+        }
+      } else {
+        setPurchaseError(data.error || "创建订单失败");
+      }
+    } catch (err) {
+      setPurchaseError(
+        err instanceof Error ? err.message : "网络请求失败"
+      );
+    } finally {
+      setPurchaseLoading(null);
+    }
+  };
+
+  const handleCopyOrderId = async (orderId: string) => {
+    try {
+      await navigator.clipboard.writeText(orderId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Fallback
+      const textArea = document.createElement("textarea");
+      textArea.value = orderId;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // ── Loading state ────────────────────────────────────────────────────────
+
+  if (isLoading) {
+    return <LoadingScreen />;
+  }
+
+  // ── Render (always show workspace, regardless of login) ──────────────────
 
   return (
     <div className="min-h-screen bg-background">
+      {/* ── Login Modal ─────────────────────────────────────────────── */}
+      <LoginModal
+        open={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+      />
+
       {/* ── Video Preview Modal ──────────────────────────────────────── */}
       {previewVideoUrl && (
         <VideoPreviewModal
@@ -471,6 +1008,22 @@ export default function CreatePage() {
           onClose={() => setPreviewVideoUrl(null)}
         />
       )}
+
+      {/* ── Purchase Modal ─────────────────────────────────────────── */}
+      <PurchaseModal
+        open={showPurchaseModal}
+        onClose={() => {
+          setShowPurchaseModal(false);
+          setPurchaseResult(null);
+          setPurchaseError("");
+        }}
+        purchaseLoading={purchaseLoading}
+        purchaseResult={purchaseResult}
+        purchaseError={purchaseError}
+        onSelectPackage={handlePurchasePackage}
+        onCopyOrderId={handleCopyOrderId}
+        copied={copied}
+      />
 
       {/* ── Upgrade Banner ──────────────────────────────────────────── */}
       <div className="relative overflow-hidden bg-gradient-to-r from-accent-violet/20 via-accent-violet/10 to-accent-violet/5 border-b border-accent-violet/10">
@@ -506,29 +1059,78 @@ export default function CreatePage() {
           </Link>
 
           <div className="flex items-center gap-3">
-            {/* Credits display */}
-            <div className="flex items-center gap-1.5 rounded-full border border-border/50 bg-card/60 px-3 py-1.5 text-xs font-medium text-text-secondary backdrop-blur-sm">
-              <Coins className="h-3.5 w-3.5 text-amber-400" />
-              <span>当前积分：</span>
-              <span className="text-amber-400">{credits}</span>
-            </div>
+            {isLoggedIn ? (
+              <>
+                {/* User email */}
+                {userEmail && (
+                  <span className="hidden text-xs text-text-muted sm:block">
+                    {userEmail}
+                  </span>
+                )}
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleBuyClick}
-              className="gap-1.5 border-accent-violet/20 text-accent-violet-light hover:bg-accent-violet/10"
-            >
-              <CreditCard className="h-3.5 w-3.5" />
-              购买积分
-            </Button>
+                {/* Credits display */}
+                <div className="flex items-center gap-1.5 rounded-full border border-border/50 bg-card/60 px-3 py-1.5 text-xs font-medium text-text-secondary backdrop-blur-sm">
+                  <Coins className="h-3.5 w-3.5 text-amber-400" />
+                  <span>当前积分：</span>
+                  <span className="text-amber-400">{credits}</span>
+                  <button
+                    onClick={refreshCredits}
+                    className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-card/60 hover:text-accent-violet-light"
+                    title="刷新积分"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                  </button>
+                </div>
 
-            <Link
-              href="/"
-              className="text-xs text-text-muted transition-colors hover:text-foreground"
-            >
-              返回首页
-            </Link>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBuyClick}
+                  className="gap-1.5 border-accent-violet/20 text-accent-violet-light hover:bg-accent-violet/10"
+                >
+                  <CreditCard className="h-3.5 w-3.5" />
+                  购买积分
+                </Button>
+
+                {/* Logout */}
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
+                  title="退出登录"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">退出</span>
+                </button>
+              </>
+            ) : (
+              <>
+                {/* Unauthenticated: show "登录后赠送 30 积分" */}
+                <div className="flex items-center gap-1.5 rounded-full border border-border/50 bg-card/60 px-3 py-1.5 text-xs font-medium text-text-secondary backdrop-blur-sm">
+                  <Coins className="h-3.5 w-3.5 text-amber-400" />
+                  <span>登录后赠送 30 积分</span>
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowLoginModal(true)}
+                  className="gap-1.5 border-accent-violet/20 text-accent-violet-light hover:bg-accent-violet/10"
+                >
+                  <CreditCard className="h-3.5 w-3.5" />
+                  购买积分
+                </Button>
+
+                <Link href="/auth">
+                  <Button
+                    size="sm"
+                    className="gap-1.5 bg-gradient-to-r from-accent-violet to-accent-violet-light text-white shadow-lg transition-all duration-200 hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl"
+                  >
+                    <User className="h-3.5 w-3.5" />
+                    登录 / 注册
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -634,7 +1236,9 @@ export default function CreatePage() {
               <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-red-400">
                 <AlertCircle className="h-3 w-3" />
                 <span>
-                  当前积分不足，本次需要 {currentCost} 积分，请先购买积分
+                  {selectedModelId === "seedance-2"
+                    ? `真实视频生成成本较高，本次需要 ${currentCost} 积分。请先购买积分后再生成。`
+                    : `当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`}
                 </span>
               </div>
             )}
@@ -853,26 +1457,26 @@ export default function CreatePage() {
                 <span className="text-xs font-medium">新建项目</span>
               </button>
 
-              {/* Recent generation cards */}
-              {recentGenerations.slice(0, 4).map((gen) => (
+              {/* Recent generation cards from DB (only when logged in) */}
+              {isLoggedIn && recentGenerations.slice(0, 4).map((gen) => (
                 <div
                   key={gen.id}
                   className="group animate-fade-in-scale flex flex-col rounded-xl border border-border/40 bg-gradient-to-br from-card/70 to-card/40 p-4 backdrop-blur-sm transition-all duration-200 hover:border-accent-violet/20 hover:shadow-lg hover:shadow-accent-violet/5"
                 >
                   {/* Thumbnail */}
                   <div className="relative mb-3 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-accent-violet/10 to-accent-violet/5">
-                    {gen.coverUrl ? (
+                    {gen.cover_url ? (
                       <Image
-                        src={gen.coverUrl}
+                        src={gen.cover_url}
                         alt={gen.prompt}
                         fill
                         className="object-cover"
                         unoptimized
                       />
-                    ) : gen.videoUrl ? (
+                    ) : gen.video_url ? (
                       <>
                         <video
-                          src={gen.videoUrl}
+                          src={gen.video_url}
                           className="h-full w-full object-cover"
                           muted
                           preload="metadata"
@@ -881,7 +1485,7 @@ export default function CreatePage() {
                           <Play className="h-8 w-8 text-white/80" />
                         </div>
                       </>
-                    ) : gen.outputType === "image" ? (
+                    ) : gen.output_type === "image" ? (
                       <ImageIcon className="h-8 w-8 text-accent-violet/30" />
                     ) : (
                       <Video className="h-8 w-8 text-accent-violet/30" />
@@ -891,29 +1495,32 @@ export default function CreatePage() {
                   {/* Info */}
                   <div className="flex-1">
                     <p className="text-xs font-medium text-foreground">
-                      {gen.modelName}
+                      {gen.model}
                     </p>
                     <p className="mt-0.5 text-[10px] text-text-muted">
-                      {gen.resultMessage}
+                      {gen.status === "succeeded" ? "生成成功" : gen.status === "running" ? "生成中..." : "生成失败"}
                     </p>
                     <p className="mt-0.5 text-[10px] text-text-muted">
-                      {gen.timestamp} · {gen.cost} 积分
+                      {new Date(gen.created_at).toLocaleTimeString("zh-CN", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })} · {gen.cost} 积分
                     </p>
                   </div>
 
                   {/* Actions */}
                   <div className="mt-2 flex items-center gap-1.5 border-t border-border/20 pt-2">
-                    {gen.videoUrl ? (
+                    {gen.video_url ? (
                       <>
                         <button
-                          onClick={() => setPreviewVideoUrl(gen.videoUrl!)}
+                          onClick={() => setPreviewVideoUrl(gen.video_url!)}
                           className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
                         >
                           <Play className="h-3 w-3" />
                           预览
                         </button>
                         <a
-                          href={gen.videoUrl}
+                          href={gen.video_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           download
@@ -935,7 +1542,7 @@ export default function CreatePage() {
                     </button>
                     <button
                       onClick={() => {
-                        if (gen.videoUrl) {
+                        if (gen.video_url) {
                           setGenerationError("发布功能即将上线，敬请期待");
                         }
                       }}
@@ -948,9 +1555,11 @@ export default function CreatePage() {
                 </div>
               ))}
 
-              {/* Placeholder cards if fewer than 4 recent generations */}
+              {/* Placeholder cards — show all 4 when not logged in, or fill remaining when logged in */}
               {Array.from({
-                length: Math.max(0, 4 - recentGenerations.length),
+                length: isLoggedIn
+                  ? Math.max(0, 4 - recentGenerations.length)
+                  : 4,
               }).map((_, i) => (
                 <div
                   key={`placeholder-${i}`}
@@ -1015,6 +1624,9 @@ export default function CreatePage() {
                       <span className="text-amber-400">{pkg.credits}</span>{" "}
                       积分
                     </p>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-text-muted/70">
+                      {pkg.description}
+                    </p>
 
                     <Button
                       onClick={handleBuyClick}
@@ -1037,23 +1649,6 @@ export default function CreatePage() {
         </div>
       </main>
 
-      {/* ── Buy Toast ────────────────────────────────────────────────── */}
-      {showBuyToast && (
-        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 animate-fade-in-up">
-          <div className="flex items-center gap-3 rounded-xl border border-accent-violet/20 bg-card/90 px-5 py-3 shadow-2xl backdrop-blur-xl">
-            <AlertCircle className="h-4 w-4 text-accent-violet-light" />
-            <p className="text-sm text-text-secondary">
-              支付功能将在下一阶段接入，你可以先联系客服开通。
-            </p>
-            <button
-              onClick={() => setShowBuyToast(false)}
-              className="shrink-0 text-text-muted transition-colors hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

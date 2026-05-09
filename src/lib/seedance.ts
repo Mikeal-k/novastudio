@@ -133,7 +133,7 @@ const MODEL_BASE_COST: Record<string, number> = {
   "design": 10,
   "branding": 15,
   "ecommerce": 12,
-  "seedance-2": 30,
+  "seedance-2": 150,
   "grok-imagine": 25,
   "video": 20,
 };
