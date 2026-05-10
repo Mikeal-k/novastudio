@@ -117,6 +117,9 @@ export async function GET(request: NextRequest) {
       createdAt: order.created_at,
       paidAt: order.paid_at,
       remarkCode: (order.id as string).slice(-6).toUpperCase(),
+      paymentProofUrl: order.payment_proof_url ?? null,
+      paymentProofUploadedAt: order.payment_proof_uploaded_at ?? null,
+      payerNote: order.payer_note ?? null,
     }));
 
     return Response.json({

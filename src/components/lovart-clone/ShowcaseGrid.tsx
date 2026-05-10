@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 
 const showcaseItems = [
@@ -6,36 +7,42 @@ const showcaseItems = [
     category: "网页应用",
     description: "全面的数据分析看板，支持实时数据可视化和深色模式。",
     gradient: "from-blue-600 via-purple-600 to-pink-600",
+    scene: "landing",
   },
   {
     title: "高级作品集",
     category: "作品集",
     description: "极简摄影作品集，全屏画廊与流畅过渡动画。",
     gradient: "from-emerald-500 via-teal-500 to-cyan-600",
+    scene: "landing",
   },
   {
     title: "电商展示页",
     category: "电商页面",
     description: "现代产品展示，集成交互式 3D 产品查看器和流畅结账流程。",
     gradient: "from-orange-500 via-red-500 to-rose-600",
+    scene: "landing",
   },
   {
     title: "金融应用",
     category: "金融界面",
     description: "简洁的财务管理界面，包含图表、交易记录和预算工具。",
     gradient: "from-violet-600 via-indigo-600 to-blue-600",
+    scene: "landing",
   },
   {
     title: "创意机构",
     category: "落地页",
     description: "大胆的机构落地页，包含动画 Hero、客户 Logo 和案例展示。",
     gradient: "from-pink-500 via-rose-500 to-red-500",
+    scene: "landing",
   },
   {
     title: "健康追踪",
     category: "移动端",
     description: "健康应用界面，支持活动追踪、饮食记录和进度洞察。",
     gradient: "from-green-500 via-emerald-500 to-teal-500",
+    scene: "landing",
   },
 ];
 
@@ -57,9 +64,9 @@ export function ShowcaseGrid() {
         {/* Grid */}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {showcaseItems.map((item) => (
-            <a
+            <Link
               key={item.title}
-              href="#"
+              href={`/create?scene=${item.scene}`}
               className="group relative overflow-hidden rounded-xl border border-border/50 bg-card/60 backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-accent-violet/10"
             >
               {/* Preview placeholder */}
@@ -88,7 +95,7 @@ export function ShowcaseGrid() {
                   {item.description}
                 </p>
               </div>
-            </a>
+            </Link>
           ))}
         </div>
       </div>

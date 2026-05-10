@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getGenerationCost } from "@/lib/seedance";
@@ -32,7 +32,6 @@ import {
   LogOut,
   Loader2,
   User,
-  MessageCircle,
   Copy,
   Check,
 } from "lucide-react";
@@ -142,6 +141,48 @@ const styles = [
   "产品广告",
 ];
 const clarities = ["标准", "高清", "超清"];
+
+// ─── Scene presets ────────────────────────────────────────────────────────────
+
+interface ScenePreset {
+  key: string;
+  label: string;
+  prompt: string;
+  modelId: string;
+}
+
+const scenePresets: ScenePreset[] = [
+  {
+    key: "branding",
+    label: "品牌识别",
+    prompt:
+      "为一个新消费品牌设计一套品牌识别系统，包含 Logo 方向、品牌色彩、字体风格、视觉元素和社交媒体应用场景，风格高级、简洁、有商业质感。",
+    modelId: "branding",
+  },
+  {
+    key: "landing",
+    label: "落地页设计",
+    prompt:
+      "为一个 AI 产品设计高转化落地页首屏，包含主标题、副标题、CTA 按钮、产品展示区和信任背书，深色高级科技风，适合官网使用。",
+    modelId: "design",
+  },
+  {
+    key: "poster",
+    label: "海报设计",
+    prompt:
+      "生成一张适合小红书和朋友圈传播的产品宣传海报，画面高级、重点突出、文字区域清晰，适合推广 AI 视频生成服务。",
+    modelId: "gpt-image-2",
+  },
+  {
+    key: "social",
+    label: "社交媒体",
+    prompt:
+      "为一条小红书种草内容生成封面图和视觉方向，主题是 AI 视频生成工具，画面要有点击欲、年轻化、高级感，适合社交媒体传播。",
+    modelId: "gpt-image-2",
+  },
+];
+
+const scenePresetMap = new Map(scenePresets.map((s) => [s.key, s]));
 
 // ─── Recent generation type (from DB) ───────────────────────────────────────
 
@@ -335,6 +376,69 @@ function PurchaseModal({
   onCopyOrderId: (orderId: string) => void;
   copied: boolean;
 }) {
+  // ── Proof upload state ──────────────────────────────────────────────────
+  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [payerNote, setPayerNote] = useState("");
+  const [proofUploading, setProofUploading] = useState(false);
+  const [proofUploaded, setProofUploaded] = useState(false);
+  const [proofError, setProofError] = useState("");
+
+  // ── Upload proof handler ────────────────────────────────────────────────
+  const handleUploadProof = useCallback(async () => {
+    if (!purchaseResult?.orderId) {
+      setProofError("订单号缺失，请重新创建订单");
+      return;
+    }
+    if (!proofFile) {
+      setProofError("请先选择付款截图");
+      return;
+    }
+
+    setProofUploading(true);
+    setProofError("");
+
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        setProofError("请先登录后再上传付款凭证");
+        setProofUploading(false);
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("orderId", purchaseResult.orderId);
+      formData.append("file", proofFile);
+      formData.append("payerNote", payerNote);
+
+      const res = await fetch("/api/recharge/upload-proof", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "上传失败，请重试");
+      }
+
+      setProofUploaded(true);
+      setProofError("");
+    } catch (err) {
+      setProofError(
+        err instanceof Error ? err.message : "上传失败，请重试"
+      );
+    } finally {
+      setProofUploading(false);
+    }
+  }, [purchaseResult, proofFile, payerNote]);
+
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -385,8 +489,17 @@ function PurchaseModal({
               </div>
               <h2 className="text-lg font-bold text-foreground">订单已创建</h2>
               <p className="mt-2 text-sm text-text-secondary">
-                请完成付款后，联系客服人工确认到账
+                请按以下步骤完成付款：
               </p>
+
+              {/* Steps */}
+              <div className="mt-3 rounded-xl border border-border/30 bg-card/50 p-4 text-left text-xs text-text-secondary space-y-2">
+                <p>1. 复制订单号或付款备注</p>
+                <p>2. 扫码付款</p>
+                <p>3. 付款备注填写订单号后 6 位</p>
+                <p>4. 上传付款截图</p>
+                <p>5. 等待管理员确认，确认后积分自动到账</p>
+              </div>
 
               {/* Order details */}
               <div className="mt-4 rounded-xl border border-border/30 bg-card/50 p-4 text-left text-sm">
@@ -427,17 +540,87 @@ function PurchaseModal({
                 </div>
               </div>
 
-              {/* Contact info */}
-              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-left text-sm">
-                <div className="flex items-center gap-2 text-amber-400">
-                  <MessageCircle className="h-4 w-4" />
-                  <span className="font-medium">联系客服</span>
+              {/* ── Upload Proof Section ──────────────────────────────── */}
+              {!proofUploaded ? (
+                <div className="mt-4 rounded-xl border border-border/30 bg-card/50 p-4 text-left">
+                  <h3 className="text-sm font-semibold text-foreground">上传付款截图</h3>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    付款完成后，请上传微信或支付宝付款成功截图。管理员核对后，积分会自动到账。
+                  </p>
+
+                  {/* File input */}
+                  <div className="mt-3">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border/30 bg-card/30 px-3 py-2.5 text-sm text-text-secondary transition-colors hover:border-accent-violet/30 hover:text-foreground">
+                      <ImageUp className="h-4 w-4 shrink-0" />
+                      <span className="flex-1 truncate">
+                        {proofFile ? proofFile.name : "选择截图文件"}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          setProofFile(file);
+                          if (file) setProofError("");
+                        }}
+                      />
+                    </label>
+                    <p className="mt-1 text-[10px] text-text-muted">支持 PNG/JPG/WebP，最大 5MB</p>
+                  </div>
+
+                  {/* Payer note */}
+                  <div className="mt-3">
+                    <input
+                      type="text"
+                      value={payerNote}
+                      onChange={(e) => setPayerNote(e.target.value)}
+                      placeholder="例如：已用支付宝付款，备注 1A2B3C"
+                      className="w-full rounded-lg border border-border/30 bg-card/30 px-3 py-2.5 text-sm text-foreground placeholder:text-text-muted/60 outline-none transition-colors focus:border-accent-violet/40"
+                    />
+                  </div>
+
+                  {/* Submit button */}
+                  <button
+                    onClick={handleUploadProof}
+                    disabled={proofUploading}
+                    className="mt-3 w-full rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {proofUploading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        上传中...
+                      </span>
+                    ) : (
+                      "提交付款凭证"
+                    )}
+                  </button>
+
+                  {/* Error */}
+                  {proofError && (
+                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-400">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span>{proofError}</span>
+                    </div>
+                  )}
                 </div>
-                <p className="mt-1.5 text-xs text-text-secondary">
-                  请扫码或搜索微信号添加客服，发送订单号完成付款。
-                </p>
-                <p className="mt-1 text-xs text-text-muted">
-                  客服微信：<span className="text-text-secondary">请替换为你的微信号</span>
+              ) : (
+                /* ── Upload Success ──────────────────────────────────── */
+                <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
+                  <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/20">
+                    <Check className="h-5 w-5 text-emerald-400" />
+                  </div>
+                  <p className="text-sm font-medium text-emerald-400">
+                    付款凭证已提交，请等待管理员确认
+                  </p>
+                </div>
+              )}
+
+              {/* Contact info — optional, not required */}
+              <div className="mt-3 rounded-xl border border-amber-500/10 bg-amber-500/5 p-3 text-left text-xs text-text-muted">
+                <p>
+                  遇到问题时，可联系客服微信：
+                  <span className="text-text-secondary">请替换为你的微信号</span>
                 </p>
               </div>
 
@@ -524,6 +707,7 @@ function PurchaseModal({
 
 export default function CreatePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-2");
   const [outputType, setOutputType] = useState<OutputType>("image");
   const [videoDuration, setVideoDuration] = useState<number>(10);
@@ -552,10 +736,29 @@ export default function CreatePage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [activeScene, setActiveScene] = useState<string | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const supabase = createBrowserSupabaseClient();
+
+  // ── Read search params (scene / prompt) on mount ────────────────────────
+  useEffect(() => {
+    const sceneParam = searchParams.get("scene");
+    const promptParam = searchParams.get("prompt");
+
+    if (promptParam) {
+      // prompt param takes priority
+      setPrompt(decodeURIComponent(promptParam));
+    } else if (sceneParam) {
+      const preset = scenePresetMap.get(sceneParam);
+      if (preset) {
+        setActiveScene(sceneParam);
+        setPrompt(preset.prompt);
+        setSelectedModelId(preset.modelId);
+      }
+    }
+  }, [searchParams]);
 
   // ── Auth check on mount ─────────────────────────────────────────────────
   useEffect(() => {
@@ -1148,6 +1351,18 @@ export default function CreatePage() {
           <p className="mx-auto mt-3 max-w-2xl text-sm leading-relaxed text-text-secondary">
             输入创意需求，选择生成模型，快速制作商品图、短视频、海报、封面和带货素材。
           </p>
+
+          {/* Scene tag */}
+          {activeScene && (() => {
+            const preset = scenePresetMap.get(activeScene);
+            if (!preset) return null;
+            return (
+              <div className="mt-4 inline-flex items-center gap-2 rounded-full border border-accent-violet/20 bg-accent-violet/10 px-4 py-1.5 text-sm text-accent-violet-light backdrop-blur-sm">
+                <Sparkles className="h-4 w-4" />
+                <span>当前场景：{preset.label}</span>
+              </div>
+            );
+          })()}
         </div>
 
         {/* ── Main creation area ────────────────────────────────────── */}

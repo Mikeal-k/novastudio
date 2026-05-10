@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Sparkles, Zap, FileImage, Brain } from "lucide-react";
 
@@ -93,14 +94,16 @@ export function CTASection() {
                     }}
                   />
                 </div>
-                <Button
-                  size="lg"
-                  className="h-11 gap-2 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-6 text-base text-white shadow-lg hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl glow transition-all duration-200"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  开始创作
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
+                <Link href="/create">
+                  <Button
+                    size="lg"
+                    className="h-11 gap-2 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-6 text-base text-white shadow-lg hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl glow transition-all duration-200"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    开始创作
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
               </div>
             </div>
 

@@ -1,21 +1,46 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Sparkles, Palette, Layout, Layers, Zap, PenTool } from "lucide-react";
 
 const promptChips = [
-  { label: "品牌识别", icon: Palette },
-  { label: "落地页", icon: Layout },
-  { label: "海报", icon: PenTool },
-  { label: "社交媒体", icon: Layers },
+  {
+    label: "品牌识别",
+    icon: Palette,
+    scene: "branding",
+    hoverText: "Logo / 色板 / 品牌视觉",
+  },
+  {
+    label: "落地页",
+    icon: Layout,
+    scene: "landing",
+    hoverText: "官网首屏 / 转化页",
+  },
+  {
+    label: "海报",
+    icon: PenTool,
+    scene: "poster",
+    hoverText: "宣传海报 / 封面图",
+  },
+  {
+    label: "社交媒体",
+    icon: Layers,
+    scene: "social",
+    hoverText: "小红书 / 抖音素材",
+  },
 ];
 
 export function HeroSection() {
   const [prompt, setPrompt] = useState("");
 
-  const handleChipClick = (text: string) => {
-    setPrompt(`为我的品牌设计${text}...`);
+  const getCreateUrl = () => {
+    const trimmed = prompt.trim();
+    if (trimmed) {
+      return `/create?prompt=${encodeURIComponent(trimmed)}`;
+    }
+    return "/create";
   };
 
   return (
@@ -82,28 +107,34 @@ export function HeroSection() {
                 }}
               />
             </div>
-            <Button
-              size="lg"
-              className="h-12 gap-2 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-6 text-base text-white shadow-lg hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl glow transition-all duration-200"
-            >
-              <Sparkles className="h-5 w-5" />
-              开始生成
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+            <Link href={getCreateUrl()}>
+              <Button
+                size="lg"
+                className="h-12 gap-2 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-6 text-base text-white shadow-lg hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl glow transition-all duration-200"
+              >
+                <Sparkles className="h-5 w-5" />
+                开始生成
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
           </div>
         </div>
 
-        {/* Prompt chips */}
+        {/* Prompt chips — clickable scene links */}
         <div className="mb-12 flex flex-wrap items-center justify-center gap-2">
-          {promptChips.map(({ label, icon: Icon }) => (
-            <button
+          {promptChips.map(({ label, icon: Icon, scene, hoverText }) => (
+            <Link
               key={label}
-              onClick={() => handleChipClick(label)}
-              className="group flex items-center gap-1.5 rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-sm text-text-secondary backdrop-blur-sm transition-all duration-200 hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+              href={`/create?scene=${scene}`}
+              className="group relative flex items-center gap-1.5 rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-sm text-text-secondary backdrop-blur-sm transition-all duration-200 hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light"
             >
               <Icon className="h-3.5 w-3.5 transition-transform duration-200 group-hover:scale-110" />
-              {label}
-            </button>
+              <span>{label}</span>
+              {/* Hover tooltip */}
+              <span className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md border border-white/10 bg-black/90 px-2.5 py-1 text-[10px] text-text-secondary opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
+                {hoverText}
+              </span>
+            </Link>
           ))}
         </div>
 
@@ -126,7 +157,7 @@ export function HeroSection() {
               </div>
               {/* Typing indicator */}
               <div className="mt-3 flex items-center gap-1 rounded-lg bg-accent-violet/10 px-3 py-1.5">
-                <span className="text-xs text-accent-violet-light">AI 生成中</span>
+                <span className="text-xs text-accent-violet-light">AI 正在生成品牌视觉</span>
                 <span className="flex gap-0.5">
                   <span className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-accent-violet-light" />
                   <span className="h-1.5 w-1.5 animate-typing-dot rounded-full bg-accent-violet-light" />
@@ -150,7 +181,7 @@ export function HeroSection() {
               </div>
               <div className="mt-3 flex items-center gap-1 text-xs text-text-muted">
                 <Zap className="h-3 w-3 text-accent-violet-light" />
-                <span>12 秒就绪</span>
+                <span>12 秒生成落地页草案</span>
               </div>
             </div>
           </div>
@@ -167,6 +198,10 @@ export function HeroSection() {
                 <div className="h-3 w-1/2 rounded-full bg-white/10" />
                 <div className="h-2 w-3/4 rounded-full bg-white/6" />
               </div>
+              <div className="mt-3 flex items-center gap-1 text-xs text-text-muted">
+                <Sparkles className="h-3 w-3 text-accent-violet-light" />
+                <span>海报封面已就绪</span>
+              </div>
             </div>
           </div>
 
@@ -181,6 +216,10 @@ export function HeroSection() {
               <div className="space-y-2">
                 <div className="h-3 w-2/3 rounded-full bg-white/10" />
                 <div className="h-2 w-1/2 rounded-full bg-white/6" />
+              </div>
+              <div className="mt-3 flex items-center gap-1 text-xs text-text-muted">
+                <Zap className="h-3 w-3 text-accent-violet-light" />
+                <span>社媒素材自动排版</span>
               </div>
             </div>
           </div>
@@ -210,14 +249,14 @@ export function HeroSection() {
               {/* Workspace canvas — design grid preview */}
               <div className="p-5 sm:p-6">
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
-                  {/* Design card 1 */}
+                  {/* Design card 1 — Logo 方向 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-purple-500/15 via-accent-violet/10 to-pink-500/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <Layout className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">落地页</span>
+                        <span className="text-xs text-text-muted">Logo 方向</span>
                       </div>
                     </div>
                     {/* Hover overlay */}
@@ -228,14 +267,14 @@ export function HeroSection() {
                     </div>
                   </div>
 
-                  {/* Design card 2 */}
+                  {/* Design card 2 — 品牌色板 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-blue-500/15 via-accent-violet/10 to-cyan-500/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <Palette className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">品牌套件</span>
+                        <span className="text-xs text-text-muted">品牌色板</span>
                       </div>
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center bg-accent-violet/20 opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
@@ -245,14 +284,14 @@ export function HeroSection() {
                     </div>
                   </div>
 
-                  {/* Design card 3 */}
+                  {/* Design card 3 — 官网首屏 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-emerald-500/15 via-teal-500/10 to-accent-violet/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <PenTool className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">社交媒体</span>
+                        <span className="text-xs text-text-muted">官网首屏</span>
                       </div>
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center bg-accent-violet/20 opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
@@ -262,14 +301,14 @@ export function HeroSection() {
                     </div>
                   </div>
 
-                  {/* Design card 4 */}
+                  {/* Design card 4 — 社媒封面 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-amber-500/15 via-orange-500/10 to-accent-violet/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <Layers className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">演示文稿</span>
+                        <span className="text-xs text-text-muted">社媒封面</span>
                       </div>
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center bg-accent-violet/20 opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
@@ -279,14 +318,14 @@ export function HeroSection() {
                     </div>
                   </div>
 
-                  {/* Design card 5 */}
+                  {/* Design card 5 — 宣传海报 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-rose-500/15 via-pink-500/10 to-accent-violet/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <Zap className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">广告创意</span>
+                        <span className="text-xs text-text-muted">宣传海报</span>
                       </div>
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center bg-accent-violet/20 opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
@@ -296,14 +335,14 @@ export function HeroSection() {
                     </div>
                   </div>
 
-                  {/* Design card 6 */}
+                  {/* Design card 6 — 视频分镜 */}
                   <div className="group relative overflow-hidden rounded-xl border border-white/8 bg-gradient-to-br from-sky-500/15 via-indigo-500/10 to-accent-violet/10 transition-all duration-300 hover:scale-[1.02] hover:border-accent-violet/20">
                     <div className="aspect-[4/3] flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
                         <div className="h-12 w-12 rounded-lg bg-white/10 backdrop-blur-sm flex items-center justify-center">
                           <Sparkles className="h-6 w-6 text-accent-violet-light" />
                         </div>
-                        <span className="text-xs text-text-muted">设计稿</span>
+                        <span className="text-xs text-text-muted">视频分镜</span>
                       </div>
                     </div>
                     <div className="absolute inset-0 flex items-center justify-center bg-accent-violet/20 opacity-0 backdrop-blur-sm transition-opacity duration-200 group-hover:opacity-100">
@@ -321,8 +360,8 @@ export function HeroSection() {
         {/* Stats row — moved below the visual showcase */}
         <div className="mt-12 flex flex-wrap items-center justify-center gap-8 sm:gap-16">
           {[
-            { value: "50K+", label: "设计作品" },
-            { value: "10K+", label: "活跃用户" },
+            { value: "50K+", label: "设计草案" },
+            { value: "10K+", label: "创作者使用" },
             { value: "4.9★", label: "用户评分" },
           ].map((stat) => (
             <div key={stat.label} className="text-center">

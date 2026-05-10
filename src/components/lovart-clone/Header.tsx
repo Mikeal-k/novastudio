@@ -61,15 +61,19 @@ export function Header() {
 
         {/* Desktop CTA */}
         <div className="hidden items-center gap-3 md:flex">
-          <Button variant="ghost" size="sm">
-            登录
-          </Button>
-          <Button
-            size="sm"
-            className="bg-gradient-to-r from-accent-violet to-accent-violet-light text-white hover:from-accent-violet-dark hover:to-accent-violet"
-          >
-            开始使用
-          </Button>
+          <Link href="/auth">
+            <Button variant="ghost" size="sm">
+              登录
+            </Button>
+          </Link>
+          <Link href="/create">
+            <Button
+              size="sm"
+              className="bg-gradient-to-r from-accent-violet to-accent-violet-light text-white hover:from-accent-violet-dark hover:to-accent-violet"
+            >
+              开始使用
+            </Button>
+          </Link>
         </div>
 
         {/* Mobile Menu Button */}
@@ -101,15 +105,19 @@ export function Header() {
               </a>
             ))}
             <div className="mt-2 flex flex-col gap-2 border-t border-border/50 pt-4">
-              <Button variant="ghost" size="sm" className="w-full justify-center">
-                登录
-              </Button>
-              <Button
-                size="sm"
-                className="w-full justify-center bg-gradient-to-r from-accent-violet to-accent-violet-light text-white"
-              >
-                开始使用
-              </Button>
+              <Link href="/auth" onClick={() => setMobileOpen(false)}>
+                <Button variant="ghost" size="sm" className="w-full justify-center">
+                  登录
+                </Button>
+              </Link>
+              <Link href="/create" onClick={() => setMobileOpen(false)}>
+                <Button
+                  size="sm"
+                  className="w-full justify-center bg-gradient-to-r from-accent-violet to-accent-violet-light text-white"
+                >
+                  开始使用
+                </Button>
+              </Link>
             </div>
           </nav>
         </div>

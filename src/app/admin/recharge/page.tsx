@@ -37,6 +37,9 @@ interface RechargeOrder {
   createdAt: string;
   paidAt: string | null;
   remarkCode: string;
+  paymentProofUrl: string | null;
+  paymentProofUploadedAt: string | null;
+  payerNote: string | null;
 }
 
 type FilterMode = "pending" | "all";
@@ -565,7 +568,7 @@ export default function AdminRechargePage() {
                   <div className="mb-3 grid grid-cols-2 gap-4 text-xs">
                     <div>
                       <span className="text-gray-500">订单号</span>
-                      <p className="mt-0.5 font-mono text-[10px] text-gray-300 truncate">
+                      <p className="mt-0.5 font-mono text-[10px] text-gray-300 break-all">
                         {order.id}
                       </p>
                     </div>
@@ -583,6 +586,45 @@ export default function AdminRechargePage() {
                       已支付时间：{new Date(order.paidAt).toLocaleString("zh-CN")}
                     </div>
                   )}
+
+                  {/* Payment proof */}
+                  <div className="mb-3">
+                    {order.paymentProofUrl ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-medium text-emerald-400">
+                            付款截图：已上传
+                          </span>
+                          {order.paymentProofUploadedAt && (
+                            <span className="text-[10px] text-gray-500">
+                              {new Date(order.paymentProofUploadedAt).toLocaleString("zh-CN")}
+                            </span>
+                          )}
+                        </div>
+                        <a
+                          href={order.paymentProofUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-block"
+                        >
+                          <img
+                            src={order.paymentProofUrl}
+                            alt="付款截图"
+                            className="w-40 rounded-lg border border-gray-700 object-cover transition-opacity hover:opacity-80"
+                          />
+                        </a>
+                        {order.payerNote && (
+                          <p className="text-[11px] text-gray-400">
+                            用户备注：{order.payerNote}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-gray-500">
+                        付款截图：未上传
+                      </span>
+                    )}
+                  </div>
 
                   {/* Action buttons */}
                   <div className="flex flex-wrap items-center gap-2 border-t border-gray-800 pt-3">
