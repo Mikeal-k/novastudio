@@ -112,6 +112,9 @@ CREATE TABLE IF NOT EXISTS public.recharge_orders (
   status text NOT NULL DEFAULT 'pending',
   contact_note text,
   admin_note text,
+  payment_proof_url text,
+  payment_proof_uploaded_at timestamptz,
+  payer_note text,
   created_at timestamptz DEFAULT now(),
   paid_at timestamptz
 );
@@ -136,3 +139,14 @@ CREATE INDEX IF NOT EXISTS idx_generations_task_id ON public.generations(task_id
 CREATE INDEX IF NOT EXISTS idx_generations_created_at ON public.generations(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_recharge_orders_user_id ON public.recharge_orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_recharge_orders_status ON public.recharge_orders(status);
+
+-- ─── 8. Migration: Add payment proof columns (safe for existing tables) ─────
+
+ALTER TABLE public.recharge_orders
+ADD COLUMN IF NOT EXISTS payment_proof_url text;
+
+ALTER TABLE public.recharge_orders
+ADD COLUMN IF NOT EXISTS payment_proof_uploaded_at timestamptz;
+
+ALTER TABLE public.recharge_orders
+ADD COLUMN IF NOT EXISTS payer_note text;

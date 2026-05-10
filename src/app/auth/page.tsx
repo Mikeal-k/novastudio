@@ -14,6 +14,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Loader2,
+  CheckCircle2,
 } from "lucide-react";
 
 type AuthTab = "login" | "register";
@@ -27,6 +28,13 @@ export default function AuthPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Forgot password state
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSent, setResetSent] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState("");
 
   const supabase = createBrowserSupabaseClient();
 
@@ -125,6 +133,168 @@ export default function AuthPage() {
     },
     [email, password, tab, handleLogin, handleRegister]
   );
+
+  const handleResetPassword = useCallback(async () => {
+    setResetError("");
+    setResetLoading(true);
+
+    try {
+      const { error: resetError } =
+        await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
+          redirectTo: `${window.location.origin}/reset-password`,
+        });
+
+      if (resetError) {
+        setResetError(resetError.message);
+        return;
+      }
+
+      setResetSent(true);
+    } catch {
+      setResetError("发送重置邮件失败，请稍后重试");
+    } finally {
+      setResetLoading(false);
+    }
+  }, [resetEmail, supabase]);
+
+  const handleBackToLogin = useCallback(() => {
+    setShowForgotPassword(false);
+    setResetSent(false);
+    setResetEmail("");
+    setResetError("");
+  }, []);
+
+  // Forgot password form
+  if (showForgotPassword) {
+    return (
+      <div className="relative flex min-h-screen flex-col items-center justify-center bg-background overflow-hidden">
+        {/* Background decoration */}
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div className="absolute -left-40 -top-40 h-80 w-80 rounded-full bg-accent-violet/10 blur-3xl" />
+          <div className="absolute -bottom-40 -right-40 h-80 w-80 rounded-full bg-accent-violet/5 blur-3xl" />
+        </div>
+
+        {/* Back to home */}
+        <Link
+          href="/"
+          className="absolute left-4 top-4 flex items-center gap-1.5 text-xs text-text-muted transition-colors hover:text-foreground sm:left-8 sm:top-8"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          返回首页
+        </Link>
+
+        {/* Reset card */}
+        <div className="relative z-10 mx-4 w-full max-w-md">
+          {/* Glow */}
+          <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-br from-accent-violet/20 via-transparent to-accent-violet/5 opacity-60 blur-xl" />
+
+          <div className="relative rounded-2xl border border-border/50 bg-card/70 p-6 backdrop-blur-xl shadow-lg shadow-black/10 sm:p-8">
+            {/* Logo */}
+            <div className="mb-6 text-center">
+              <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-accent-violet to-accent-violet-light shadow-lg">
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
+              <h1 className="text-xl font-bold text-foreground">
+                重置密码
+              </h1>
+              <p className="mt-1 text-sm text-text-secondary">
+                输入你的邮箱地址，我们将发送重置密码链接
+              </p>
+            </div>
+
+            {/* Reset error */}
+            {resetError && (
+              <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2.5 text-xs text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
+
+            {/* Reset success */}
+            {resetSent ? (
+              <div className="space-y-4">
+                <div className="flex flex-col items-center gap-3 rounded-lg border border-green-400/20 bg-green-400/10 px-4 py-6 text-center">
+                  <CheckCircle2 className="h-10 w-10 text-green-400" />
+                  <div>
+                    <p className="text-sm font-medium text-green-400">
+                      重置密码邮件已发送
+                    </p>
+                    <p className="mt-1 text-xs text-text-secondary">
+                      请前往邮箱点击链接设置新密码。
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleBackToLogin}
+                  className="w-full rounded-lg bg-gradient-to-r from-accent-violet to-accent-violet-light py-2.5 text-sm font-medium text-white shadow-lg transition-all duration-200 hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl"
+                >
+                  返回登录
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Email */}
+                <div>
+                  <label
+                    htmlFor="reset-email"
+                    className="mb-1.5 block text-xs font-medium text-text-muted"
+                  >
+                    邮箱地址
+                  </label>
+                  <div className="relative">
+                    <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                      <Mail className="h-4 w-4 text-text-muted" />
+                    </div>
+                    <input
+                      id="reset-email"
+                      type="email"
+                      value={resetEmail}
+                      onChange={(e) => {
+                        setResetEmail(e.target.value);
+                        if (resetError) setResetError("");
+                      }}
+                      placeholder="your@email.com"
+                      className="w-full rounded-lg border border-border/60 bg-card/40 py-2.5 pl-10 pr-3 text-sm text-foreground placeholder-text-muted/50 outline-none transition-all duration-200 focus:border-accent-violet/40 focus:ring-1 focus:ring-accent-violet/20"
+                      autoComplete="email"
+                    />
+                  </div>
+                </div>
+
+                {/* Send reset button */}
+                <button
+                  onClick={handleResetPassword}
+                  disabled={resetLoading || !resetEmail.trim()}
+                  className={cn(
+                    "w-full rounded-lg bg-gradient-to-r from-accent-violet to-accent-violet-light py-2.5 text-sm font-medium text-white shadow-lg transition-all duration-200",
+                    "hover:from-accent-violet-dark hover:to-accent-violet hover:shadow-xl",
+                    "disabled:opacity-50 disabled:cursor-not-allowed"
+                  )}
+                >
+                  {resetLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      发送中...
+                    </span>
+                  ) : (
+                    "发送重置邮件"
+                  )}
+                </button>
+
+                {/* Back to login */}
+                <button
+                  onClick={handleBackToLogin}
+                  className="block w-full text-center text-xs text-text-muted transition-colors hover:text-accent-violet-light"
+                >
+                  返回登录
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-background overflow-hidden">
@@ -280,6 +450,23 @@ export default function AuthPage() {
                 </button>
               </div>
             </div>
+
+            {/* Forgot password link (login tab only) */}
+            {tab === "login" && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForgotPassword(true);
+                    setError("");
+                    setSuccess("");
+                  }}
+                  className="text-xs text-text-muted transition-colors hover:text-accent-violet-light"
+                >
+                  忘记密码？
+                </button>
+              </div>
+            )}
 
             {/* Submit */}
             <button

@@ -3,7 +3,47 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 
 export async function POST(request: NextRequest) {
   try {
-    // ── 1. Verify admin secret ─────────────────────────────────────────
+    // ── 1. Verify admin identity via login session ─────────────────────
+    const authHeader = request.headers.get("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return Response.json(
+        { success: false, error: "未提供认证令牌" },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.slice(7);
+    const adminClient = createAdminSupabaseClient();
+
+    const {
+      data: { user },
+      error: authError,
+    } = await adminClient.auth.getUser(token);
+
+    if (authError || !user) {
+      return Response.json(
+        { success: false, error: "认证失败，请重新登录" },
+        { status: 401 }
+      );
+    }
+
+    const adminEmail = process.env.ADMIN_EMAIL;
+    if (!adminEmail) {
+      console.error("[api/admin/recharge/approve] ADMIN_EMAIL not set");
+      return Response.json(
+        { success: false, error: "服务端未配置管理员邮箱" },
+        { status: 500 }
+      );
+    }
+
+    if (user.email !== adminEmail) {
+      return Response.json(
+        { success: false, error: "无权限访问" },
+        { status: 403 }
+      );
+    }
+
+    // ── 2. Verify admin secret ─────────────────────────────────────────
     const adminSecret = request.headers.get("x-admin-secret");
     const expectedSecret = process.env.ADMIN_RECHARGE_SECRET;
 
@@ -22,7 +62,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 2. Parse request body ──────────────────────────────────────────
+    // ── 3. Parse request body ──────────────────────────────────────────
     const body = (await request.json()) as { orderId?: string };
     const orderId = body.orderId;
 
@@ -33,9 +73,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const adminClient = createAdminSupabaseClient();
-
-    // ── 3. Fetch the order ─────────────────────────────────────────────
+    // ── 4. Fetch the order ─────────────────────────────────────────────
     const { data: order, error: fetchError } = await adminClient
       .from("recharge_orders")
       .select("*")
@@ -49,7 +87,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 4. Validate order status ───────────────────────────────────────
+    // ── 5. Validate order status ───────────────────────────────────────
     if (order.status !== "pending") {
       return Response.json(
         {
@@ -60,7 +98,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 5. Approve: update order, add credits, insert transaction ──────
+    // ── 6. Approve: update order, add credits, insert transaction ──────
     // Use a transaction-like approach with Supabase
 
     // 5a. Update order status to paid
