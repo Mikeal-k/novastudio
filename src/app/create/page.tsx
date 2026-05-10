@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -20,7 +20,6 @@ import {
   Repeat,
   Send,
   Zap,
-  Crown,
   Star,
   Coins,
   CreditCard,
@@ -48,6 +47,8 @@ interface ModelOption {
   supportedOutputs: OutputType[];
   generateLabel: (outputType: OutputType) => string;
   resultMessage: (outputType: OutputType) => string;
+  /** "real" = genuinely connected, "mock" = experience mode / coming soon */
+  status: "real" | "mock";
 }
 
 const models: ModelOption[] = [
@@ -59,6 +60,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
+    status: "mock",
   },
   {
     id: "seedance-2",
@@ -68,6 +70,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["video"],
     generateLabel: () => "生成视频",
     resultMessage: () => "视频已生成",
+    status: "real",
   },
   {
     id: "grok-imagine",
@@ -79,6 +82,7 @@ const models: ModelOption[] = [
       outputType === "image" ? "生成图片" : "生成视频",
     resultMessage: (outputType: OutputType) =>
       outputType === "image" ? "图片已生成" : "视频草稿已生成",
+    status: "mock",
   },
   {
     id: "nano-banana-pro",
@@ -88,6 +92,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
+    status: "mock",
   },
   {
     id: "design",
@@ -97,6 +102,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
+    status: "mock",
   },
   {
     id: "branding",
@@ -106,6 +112,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
+    status: "mock",
   },
   {
     id: "ecommerce",
@@ -115,6 +122,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
+    status: "mock",
   },
   {
     id: "video",
@@ -124,6 +132,7 @@ const models: ModelOption[] = [
     supportedOutputs: ["video"],
     generateLabel: () => "生成视频",
     resultMessage: () => "视频草稿已生成",
+    status: "mock",
   },
 ];
 
@@ -488,7 +497,14 @@ function PurchaseModal({
                 <Check className="h-7 w-7 text-emerald-400" />
               </div>
               <h2 className="text-lg font-bold text-foreground">订单已创建</h2>
-              <p className="mt-2 text-sm text-text-secondary">
+
+              {/* Order status badge */}
+              <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-400">
+                <Clock className="h-3.5 w-3.5" />
+                {proofUploaded ? "已提交付款凭证 · 等待管理员确认" : "待付款"}
+              </div>
+
+              <p className="mt-3 text-sm text-text-secondary">
                 请按以下步骤完成付款：
               </p>
 
@@ -583,13 +599,18 @@ function PurchaseModal({
                   {/* Submit button */}
                   <button
                     onClick={handleUploadProof}
-                    disabled={proofUploading}
+                    disabled={proofUploading || proofUploaded}
                     className="mt-3 w-full rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {proofUploading ? (
                       <span className="flex items-center justify-center gap-2">
                         <Loader2 className="h-4 w-4 animate-spin" />
                         上传中...
+                      </span>
+                    ) : proofUploaded ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <Check className="h-4 w-4" />
+                        付款凭证已提交
                       </span>
                     ) : (
                       "提交付款凭证"
@@ -611,7 +632,10 @@ function PurchaseModal({
                     <Check className="h-5 w-5 text-emerald-400" />
                   </div>
                   <p className="text-sm font-medium text-emerald-400">
-                    付款凭证已提交，请等待管理员确认
+                    付款凭证已提交
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-400/70">
+                    管理员确认后，积分会自动到账。请勿重复创建订单。
                   </p>
                 </div>
               )}
@@ -705,7 +729,7 @@ function PurchaseModal({
 
 // ─── Main Component ─────────────────────────────────────────────────────────
 
-export default function CreatePage() {
+function CreatePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-2");
@@ -717,7 +741,6 @@ export default function CreatePage() {
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [selectedStyle, setSelectedStyle] = useState("真实质感");
   const [selectedClarity, setSelectedClarity] = useState("标准");
-  const [showBuyToast, setShowBuyToast] = useState(false);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [purchaseLoading, setPurchaseLoading] = useState<string | null>(null);
   const [purchaseResult, setPurchaseResult] = useState<{
@@ -1047,10 +1070,15 @@ export default function CreatePage() {
 
     // Check if user has enough credits
     if (isInsufficientCredits) {
+      const deficit = currentCost - credits;
       if (selectedModel.id === "seedance-2") {
-        setGenerationError(`真实视频生成成本较高，本次需要 ${currentCost} 积分。请先购买积分后再生成。`);
+        setGenerationError(
+          `当前积分不足，本次需要 ${currentCost} 积分，你还差 ${deficit} 积分。请先购买积分后再生成。\n真实视频生成成本较高，生成前请确认提示词、比例和时长。`
+        );
       } else {
-        setGenerationError(`当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`);
+        setGenerationError(
+          `当前积分不足，本次需要 ${currentCost} 积分，你还差 ${deficit} 积分。请先购买积分后再生成。`
+        );
       }
       return;
     }
@@ -1066,6 +1094,13 @@ export default function CreatePage() {
     }
 
     // All other models → mock (deduct credits locally for mock)
+    // Show experience mode notice for mock models
+    if (selectedModel.status === "mock") {
+      setGenerationError("当前为体验模式，真实生成能力即将接入。");
+      setIsGenerating(false);
+      return;
+    }
+
     setTimeout(() => {
       selectedModel.resultMessage(outputType);
       const gen: DBGeneration = {
@@ -1102,6 +1137,7 @@ export default function CreatePage() {
     isInsufficientCredits,
     currentCost,
     isLoggedIn,
+    credits,
   ]);
 
   // ── Logout ───────────────────────────────────────────────────────────────
@@ -1241,10 +1277,11 @@ export default function CreatePage() {
           <Button
             variant="outline"
             size="sm"
+            onClick={handleBuyClick}
             className="shrink-0 gap-1.5 border-accent-violet/30 bg-accent-violet/10 text-accent-violet-light hover:bg-accent-violet/20 hover:text-accent-violet-light"
           >
-            <Crown className="h-3.5 w-3.5" />
-            立即升级
+            <CreditCard className="h-3.5 w-3.5" />
+            购买积分
           </Button>
         </div>
       </div>
@@ -1448,13 +1485,19 @@ export default function CreatePage() {
 
             {/* Insufficient credits warning */}
             {isInsufficientCredits && (
-              <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-red-400">
-                <AlertCircle className="h-3 w-3" />
-                <span>
-                  {selectedModelId === "seedance-2"
-                    ? `真实视频生成成本较高，本次需要 ${currentCost} 积分。请先购买积分后再生成。`
-                    : `当前积分不足，本次需要 ${currentCost} 积分，请先购买积分`}
-                </span>
+              <div className="mt-2 flex flex-col items-end gap-1 text-xs text-red-400">
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>
+                    当前积分不足，本次需要 {currentCost} 积分，你还差{" "}
+                    {currentCost - credits} 积分。请先购买积分后再生成。
+                  </span>
+                </div>
+                {selectedModelId === "seedance-2" && (
+                  <span className="text-[10px] text-red-400/70">
+                    真实视频生成成本较高，生成前请确认提示词、比例和时长。
+                  </span>
+                )}
               </div>
             )}
 
@@ -1522,6 +1565,17 @@ export default function CreatePage() {
               </span>
               <span className="text-text-muted">·</span>
               <span className="text-text-muted">{selectedModel.description}</span>
+              {/* Model status badge */}
+              <span
+                className={cn(
+                  "ml-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  selectedModel.status === "real"
+                    ? "bg-emerald-500/10 text-emerald-400"
+                    : "bg-amber-500/10 text-amber-400"
+                )}
+              >
+                {selectedModel.status === "real" ? "真实生成" : "体验模式 · 即将接入"}
+              </span>
             </div>
           </section>
 
@@ -1865,5 +1919,13 @@ export default function CreatePage() {
       </main>
 
     </div>
+  );
+}
+
+export default function CreatePage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-background" />}>
+      <CreatePageContent />
+    </Suspense>
   );
 }

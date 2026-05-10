@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import {
   Loader2,
@@ -205,6 +206,13 @@ export default function AdminRechargePage() {
       return;
     }
 
+    // Check if order is already paid
+    const existingOrder = orders.find((o) => o.id === orderId.trim());
+    if (existingOrder?.status === "paid") {
+      setResult({ type: "error", message: "该订单已确认到账，无需重复操作" });
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -252,6 +260,12 @@ export default function AdminRechargePage() {
   // ── Approve from list ─────────────────────────────────────────────────────
 
   const handleApproveFromList = async (orderIdToApprove: string) => {
+    // Find the order to check its status
+    const order = orders.find((o) => o.id === orderIdToApprove);
+    if (order?.status === "paid") {
+      setResult({ type: "error", message: "该订单已确认到账，无需重复操作" });
+      return;
+    }
     // Auto-fill the form
     setOrderId(orderIdToApprove);
     // Scroll to form
@@ -513,15 +527,20 @@ export default function AdminRechargePage() {
                   {/* Top row: status + user email */}
                   <div className="mb-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      {order.status === "pending" ? (
+                      {order.status === "paid" ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400">
+                          <CheckCircle className="h-3 w-3" />
+                          已到账
+                        </span>
+                      ) : order.paymentProofUrl ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/15 px-2.5 py-0.5 text-[11px] font-medium text-blue-400">
+                          <CheckCircle className="h-3 w-3" />
+                          已提交凭证
+                        </span>
+                      ) : (
                         <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-medium text-amber-400">
                           <Clock className="h-3 w-3" />
                           待付款
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400">
-                          <CheckCircle className="h-3 w-3" />
-                          已支付
                         </span>
                       )}
                     </div>
@@ -607,10 +626,13 @@ export default function AdminRechargePage() {
                           rel="noreferrer"
                           className="inline-block"
                         >
-                          <img
+                          <Image
                             src={order.paymentProofUrl}
                             alt="付款截图"
-                            className="w-40 rounded-lg border border-gray-700 object-cover transition-opacity hover:opacity-80"
+                            width={160}
+                            height={120}
+                            className="rounded-lg border border-gray-700 object-cover transition-opacity hover:opacity-80"
+                            unoptimized
                           />
                         </a>
                         {order.payerNote && (
@@ -650,7 +672,11 @@ export default function AdminRechargePage() {
                       )}
                       {copiedRemark === order.remarkCode ? "已复制" : "复制备注"}
                     </button>
-                    {order.status === "pending" && (
+                    {order.status === "paid" ? (
+                      <span className="ml-auto text-[11px] text-gray-500">
+                        已确认到账
+                      </span>
+                    ) : (
                       <button
                         onClick={() => handleApproveFromList(order.id)}
                         className="ml-auto flex items-center gap-1 rounded-md bg-gradient-to-r from-violet-600 to-violet-500 px-3 py-1.5 text-[11px] font-medium text-white shadow transition-all hover:from-violet-500 hover:to-violet-400"

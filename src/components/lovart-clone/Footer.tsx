@@ -3,22 +3,22 @@ import { Globe, MessageCircle, Briefcase, Mail } from "lucide-react";
 
 const footerLinks = {
   产品: [
-    { label: "功能", href: "#features" },
-    { label: "定价", href: "#pricing" },
-    { label: "展示", href: "#showcase" },
-    { label: "更新日志", href: "#" },
+    { label: "功能", href: "/#features" },
+    { label: "定价", href: "/#pricing" },
+    { label: "展示", href: "/#showcase" },
+    { label: "创作", href: "/create" },
   ],
   资源: [
-    { label: "文档", href: "#" },
-    { label: "API 参考", href: "#" },
-    { label: "教程", href: "#" },
-    { label: "社区", href: "#" },
+    { label: "文档", href: "/create" },
+    { label: "场景预设", href: "/create" },
+    { label: "教程", href: "/create" },
+    { label: "社区", href: "/create" },
   ],
   公司: [
-    { label: "关于", href: "#" },
-    { label: "博客", href: "#" },
-    { label: "招聘", href: "#" },
-    { label: "联系我们", href: "#" },
+    { label: "关于", href: "/" },
+    { label: "博客", href: "/" },
+    { label: "招聘", href: "/" },
+    { label: "联系我们", href: "/" },
   ],
 };
 
@@ -44,10 +44,10 @@ export function Footer() {
             {/* Social links */}
             <div className="flex items-center gap-3">
               {[
-                { icon: Globe, href: "#", label: "网站" },
-                { icon: MessageCircle, href: "#", label: "社区" },
-                { icon: Briefcase, href: "#", label: "作品集" },
-                { icon: Mail, href: "#", label: "邮箱" },
+                { icon: Globe, href: "/", label: "网站" },
+                { icon: MessageCircle, href: "/create", label: "社区" },
+                { icon: Briefcase, href: "/create", label: "作品集" },
+                { icon: Mail, href: "/create", label: "邮箱" },
               ].map((social) => {
                 const Icon = social.icon;
                 return (
@@ -93,18 +93,18 @@ export function Footer() {
               &copy; {new Date().getFullYear()} Nova Studio. 保留所有权利。
             </p>
             <div className="flex gap-6">
-              <a
-                href="#"
+              <Link
+                href="/"
                 className="text-sm text-text-muted transition-colors hover:text-foreground"
               >
                 隐私政策
-              </a>
-              <a
-                href="#"
+              </Link>
+              <Link
+                href="/"
                 className="text-sm text-text-muted transition-colors hover:text-foreground"
               >
                 服务条款
-              </a>
+              </Link>
             </div>
           </div>
         </div>
