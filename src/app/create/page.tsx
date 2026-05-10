@@ -206,6 +206,12 @@ interface DBGeneration {
   cover_url: string | null;
   error: string | null;
   created_at: string;
+  isPublic?: boolean;
+  publicTitle?: string | null;
+  publicDescription?: string | null;
+  publicCategory?: string | null;
+  publishedAt?: string | null;
+  likesCount?: number;
 }
 
 // ─── Credit packages ────────────────────────────────────────────────────────
@@ -727,6 +733,180 @@ function PurchaseModal({
   );
 }
 
+// ─── Share Modal ────────────────────────────────────────────────────────────
+
+interface ShareModalProps {
+  open: boolean;
+  onClose: () => void;
+  defaultTitle: string;
+  title: string;
+  description: string;
+  category: string;
+  publishing: boolean;
+  error: string;
+  onTitleChange: (val: string) => void;
+  onDescriptionChange: (val: string) => void;
+  onCategoryChange: (val: string) => void;
+  onConfirm: () => void;
+}
+
+const shareCategories = [
+  "全部",
+  "品牌设计",
+  "海报与广告",
+  "插画",
+  "UI设计",
+  "角色设计",
+  "影片与分镜",
+  "产品设计",
+  "建筑设计",
+];
+
+function ShareModal({
+  open,
+  onClose,
+  defaultTitle,
+  title,
+  description,
+  category,
+  publishing,
+  error,
+  onTitleChange,
+  onDescriptionChange,
+  onCategoryChange,
+  onConfirm,
+}: ShareModalProps) {
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    if (open) {
+      document.addEventListener("keydown", handleEsc);
+      document.body.style.overflow = "hidden";
+    }
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+      document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-md animate-fade-in-scale">
+        <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-br from-accent-violet/30 via-transparent to-accent-violet/10 opacity-70 blur-xl" />
+        <div className="relative rounded-2xl border border-border/50 bg-card/80 p-6 backdrop-blur-xl shadow-2xl shadow-black/20">
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          <div className="mb-4 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5">
+              <Send className="h-6 w-6 text-accent-violet-light" />
+            </div>
+            <h2 className="text-lg font-bold text-foreground">分享作品</h2>
+            <p className="mt-1 text-sm text-text-secondary">
+              填写以下信息将作品公开分享到社区
+            </p>
+          </div>
+
+          {/* Title */}
+          <div className="mb-3">
+            <label className="mb-1.5 block text-xs font-medium text-text-muted">
+              作品标题 <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => onTitleChange(e.target.value)}
+              placeholder={defaultTitle || "未命名作品"}
+              className="w-full rounded-lg border border-border/30 bg-card/30 px-3 py-2.5 text-sm text-foreground placeholder:text-text-muted/60 outline-none transition-colors focus:border-accent-violet/40"
+            />
+          </div>
+
+          {/* Description */}
+          <div className="mb-3">
+            <label className="mb-1.5 block text-xs font-medium text-text-muted">
+              作品描述 <span className="text-text-muted/50">（可选）</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => onDescriptionChange(e.target.value)}
+              placeholder="简单描述你的作品..."
+              rows={3}
+              className="w-full resize-none rounded-lg border border-border/30 bg-card/30 px-3 py-2.5 text-sm text-foreground placeholder:text-text-muted/60 outline-none transition-colors focus:border-accent-violet/40"
+            />
+          </div>
+
+          {/* Category */}
+          <div className="mb-4">
+            <label className="mb-1.5 block text-xs font-medium text-text-muted">
+              分类
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {shareCategories.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => onCategoryChange(cat)}
+                  className={cn(
+                    "rounded-lg border px-2.5 py-1 text-xs font-medium transition-all duration-200",
+                    category === cat
+                      ? "border-accent-violet/30 bg-accent-violet/15 text-accent-violet-light"
+                      : "border-border/50 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:text-foreground"
+                  )}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-xs text-red-400">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="flex-1 rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+            >
+              取消
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={publishing || !title.trim()}
+              className="flex-1 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {publishing ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  分享中...
+                </span>
+              ) : (
+                "确认分享"
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 function CreatePageContent() {
@@ -760,6 +940,13 @@ function CreatePageContent() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [activeScene, setActiveScene] = useState<string | null>(null);
+  const [shareModalGenId, setShareModalGenId] = useState<string | null>(null);
+  const [shareTitle, setShareTitle] = useState("");
+  const [shareDescription, setShareDescription] = useState("");
+  const [shareCategory, setShareCategory] = useState("全部");
+  const [sharePublishing, setSharePublishing] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [shareSuccessMsg, setShareSuccessMsg] = useState("");
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1224,6 +1411,133 @@ function CreatePageContent() {
     }
   };
 
+  // ── Share / Unshare handlers ──────────────────────────────────────────────
+
+  const openShareModal = useCallback((gen: DBGeneration) => {
+    setShareModalGenId(gen.id);
+    setShareTitle(gen.publicTitle || gen.prompt || "");
+    setShareDescription(gen.publicDescription || "");
+    setShareCategory(gen.publicCategory || "全部");
+    setShareError("");
+    setSharePublishing(false);
+  }, []);
+
+  const closeShareModal = useCallback(() => {
+    setShareModalGenId(null);
+    setShareTitle("");
+    setShareDescription("");
+    setShareCategory("全部");
+    setShareError("");
+    setSharePublishing(false);
+  }, []);
+
+  const handlePublish = useCallback(async () => {
+    if (!shareModalGenId) return;
+    if (!shareTitle.trim()) {
+      setShareError("请填写作品标题");
+      return;
+    }
+
+    setSharePublishing(true);
+    setShareError("");
+
+    try {
+      const token = await getToken();
+      if (!token) {
+        setShareError("请先登录");
+        setSharePublishing(false);
+        return;
+      }
+
+      const res = await fetch(`/api/generations/${shareModalGenId}/publish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          title: shareTitle.trim(),
+          description: shareDescription.trim(),
+          category: shareCategory,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        throw new Error(data.error || "分享失败");
+      }
+
+      closeShareModal();
+
+      // Update local state
+      setRecentGenerations((prev) =>
+        prev.map((g) =>
+          g.id === shareModalGenId
+            ? {
+                ...g,
+                isPublic: true,
+                publicTitle: shareTitle.trim(),
+                publicDescription: shareDescription.trim(),
+                publicCategory: shareCategory,
+              }
+            : g
+        )
+      );
+
+      setShareSuccessMsg("作品已公开分享");
+      setTimeout(() => setShareSuccessMsg(""), 3000);
+    } catch (err) {
+      setShareError(err instanceof Error ? err.message : "分享失败，请重试");
+    } finally {
+      setSharePublishing(false);
+    }
+  }, [shareModalGenId, shareTitle, shareDescription, shareCategory, getToken, closeShareModal]);
+
+  const handleUnpublish = useCallback(async (genId: string) => {
+    try {
+      const token = await getToken();
+      if (!token) {
+        setGenerationError("请先登录");
+        return;
+      }
+
+      const res = await fetch(`/api/generations/${genId}/unpublish`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        throw new Error(data.error || "取消分享失败");
+      }
+
+      // Update local state
+      setRecentGenerations((prev) =>
+        prev.map((g) =>
+          g.id === genId
+            ? {
+                ...g,
+                isPublic: false,
+                publicTitle: null,
+                publicDescription: null,
+                publicCategory: null,
+                publishedAt: null,
+              }
+            : g
+        )
+      );
+
+      setShareSuccessMsg("已取消公开分享");
+      setTimeout(() => setShareSuccessMsg(""), 3000);
+    } catch (err) {
+      setGenerationError(err instanceof Error ? err.message : "取消分享失败，请重试");
+    }
+  }, [getToken]);
+
   // ── Loading state ────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -1263,6 +1577,37 @@ function CreatePageContent() {
         onCopyOrderId={handleCopyOrderId}
         copied={copied}
       />
+
+      {/* ── Share Modal ───────────────────────────────────────────── */}
+      <ShareModal
+        open={shareModalGenId !== null}
+        onClose={closeShareModal}
+        defaultTitle={
+          shareModalGenId
+            ? recentGenerations.find((g) => g.id === shareModalGenId)?.prompt ||
+              "未命名作品"
+            : "未命名作品"
+        }
+        title={shareTitle}
+        description={shareDescription}
+        category={shareCategory}
+        publishing={sharePublishing}
+        error={shareError}
+        onTitleChange={setShareTitle}
+        onDescriptionChange={setShareDescription}
+        onCategoryChange={setShareCategory}
+        onConfirm={handlePublish}
+      />
+
+      {/* ── Share Success Toast ──────────────────────────────────────── */}
+      {shareSuccessMsg && (
+        <div className="fixed bottom-6 left-1/2 z-[200] -translate-x-1/2 animate-fade-in-scale">
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-medium text-emerald-400 shadow-lg backdrop-blur-sm">
+            <Check className="h-4 w-4" />
+            {shareSuccessMsg}
+          </div>
+        </div>
+      )}
 
       {/* ── Upgrade Banner ──────────────────────────────────────────── */}
       <div className="relative overflow-hidden bg-gradient-to-r from-accent-violet/20 via-accent-violet/10 to-accent-violet/5 border-b border-accent-violet/10">
@@ -1809,17 +2154,28 @@ function CreatePageContent() {
                       <Repeat className="h-3 w-3" />
                       再次生成
                     </button>
-                    <button
-                      onClick={() => {
-                        if (gen.video_url) {
-                          setGenerationError("发布功能即将上线，敬请期待");
-                        }
-                      }}
-                      className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                    >
-                      <Send className="h-3 w-3" />
-                      用于发布
-                    </button>
+                    {gen.isPublic ? (
+                      <>
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-400">
+                          <Send className="h-3 w-3" />
+                          已公开
+                        </span>
+                        <button
+                          onClick={() => handleUnpublish(gen.id)}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
+                        >
+                          取消分享
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => openShareModal(gen)}
+                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                      >
+                        <Send className="h-3 w-3" />
+                        分享作品
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
