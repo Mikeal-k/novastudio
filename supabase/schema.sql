@@ -150,3 +150,64 @@ ADD COLUMN IF NOT EXISTS payment_proof_uploaded_at timestamptz;
 
 ALTER TABLE public.recharge_orders
 ADD COLUMN IF NOT EXISTS payer_note text;
+
+-- ─── 9. Public Generations Sharing & Likes ─────────────────────────────
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS is_public boolean DEFAULT false;
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS public_title text;
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS public_description text;
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS public_category text;
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS published_at timestamptz;
+
+ALTER TABLE public.generations
+ADD COLUMN IF NOT EXISTS likes_count integer DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS public.generation_likes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  generation_id uuid NOT NULL REFERENCES public.generations(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE(generation_id, user_id)
+);
+
+ALTER TABLE public.generation_likes ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can read generation likes" ON public.generation_likes;
+CREATE POLICY "Anyone can read generation likes"
+  ON public.generation_likes
+  FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can like as themselves" ON public.generation_likes;
+CREATE POLICY "Users can like as themselves"
+  ON public.generation_likes
+  FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can unlike own likes" ON public.generation_likes;
+CREATE POLICY "Users can unlike own likes"
+  ON public.generation_likes
+  FOR DELETE
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Anyone can read public generations" ON public.generations;
+CREATE POLICY "Anyone can read public generations"
+  ON public.generations
+  FOR SELECT
+  USING (is_public = true OR auth.uid() = user_id);
+
+CREATE INDEX IF NOT EXISTS idx_generations_public_published
+  ON public.generations(is_public, published_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_generation_likes_generation_id
+  ON public.generation_likes(generation_id);
+
