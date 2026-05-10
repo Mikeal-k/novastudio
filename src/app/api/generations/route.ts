@@ -1,13 +1,13 @@
-import { NextRequest } from "next/server";
+﻿import { NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 
 export async function GET(request: NextRequest) {
   try {
-    // Extract Bearer token from Authorization header
     const authHeader = request.headers.get("Authorization");
+
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return Response.json(
-        { success: false, error: "未提供认证令牌" },
+        { success: false, error: "请先登录" },
         { status: 401 }
       );
     }
@@ -15,7 +15,6 @@ export async function GET(request: NextRequest) {
     const token = authHeader.slice(7);
     const adminClient = createAdminSupabaseClient();
 
-    // Verify the user with the token
     const {
       data: { user },
       error: authError,
@@ -23,12 +22,11 @@ export async function GET(request: NextRequest) {
 
     if (authError || !user) {
       return Response.json(
-        { success: false, error: "认证失败，请重新登录" },
+        { success: false, error: "登录状态已失效，请重新登录" },
         { status: 401 }
       );
     }
 
-    // Fetch the most recent 10 generations for this user
     const { data: generations, error: genError } = await adminClient
       .from("generations")
       .select("*")
@@ -38,20 +36,35 @@ export async function GET(request: NextRequest) {
 
     if (genError) {
       console.error("[api/generations] Failed to fetch generations:", genError);
+
       return Response.json(
         { success: false, error: "获取生成记录失败" },
         { status: 500 }
       );
     }
 
+    const rows = generations ?? [];
+
     return Response.json({
       success: true,
-      generations: generations ?? [],
+      generations: rows.map((item) => ({
+        ...item,
+
+        // camelCase fields for the next UI step
+        isPublic: item.is_public ?? false,
+        publicTitle: item.public_title ?? null,
+        publicDescription: item.public_description ?? null,
+        publicCategory: item.public_category ?? null,
+        publishedAt: item.published_at ?? null,
+        likesCount: item.likes_count ?? 0,
+      })),
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "An unknown error occurred";
+
     console.error("[api/generations] Error:", message);
+
     return Response.json(
       { success: false, error: message },
       { status: 500 }
