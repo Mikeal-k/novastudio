@@ -128,6 +128,7 @@ function mapDuration(duration: number): number {
  * For video models, this is the base cost for 10s + 标准 quality.
  */
 const MODEL_BASE_COST: Record<string, number> = {
+  "gpt-image-1.5": 5,
   "gpt-image-2": 5,
   "nano-banana-pro": 8,
   "design": 10,

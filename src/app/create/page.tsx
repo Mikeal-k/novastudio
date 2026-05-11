@@ -53,14 +53,14 @@ interface ModelOption {
 
 const models: ModelOption[] = [
   {
-    id: "gpt-image-2",
-    name: "GPT Image 2",
+    id: "gpt-image-1.5",
+    name: "GPT Image 1.5",
     category: "图片生成",
     description: "适合商品图、海报、封面、分镜图",
     supportedOutputs: ["image"],
     generateLabel: () => "生成图片",
     resultMessage: () => "图片已生成",
-    status: "mock",
+    status: "real",
   },
   {
     id: "seedance-2",
@@ -180,14 +180,14 @@ const scenePresets: ScenePreset[] = [
     label: "海报设计",
     prompt:
       "生成一张适合小红书和朋友圈传播的产品宣传海报，画面高级、重点突出、文字区域清晰，适合推广 AI 视频生成服务。",
-    modelId: "gpt-image-2",
+    modelId: "gpt-image-1.5",
   },
   {
     key: "social",
     label: "社交媒体",
     prompt:
       "为一条小红书种草内容生成封面图和视觉方向，主题是 AI 视频生成工具，画面要有点击欲、年轻化、高级感，适合社交媒体传播。",
-    modelId: "gpt-image-2",
+    modelId: "gpt-image-1.5",
   },
 ];
 
@@ -264,6 +264,50 @@ function VideoPreviewModal({
         >
           您的浏览器不支持视频播放
         </video>
+      </div>
+    </div>
+  );
+}
+
+// ─── Image Preview Modal ───────────────────────────────────────────────────
+
+function ImagePreviewModal({
+  imageUrl,
+  onClose,
+}: {
+  imageUrl: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleEsc);
+    return () => document.removeEventListener("keydown", handleEsc);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-3xl overflow-hidden rounded-2xl border border-border/40 bg-card shadow-2xl">
+        <button
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <div className="relative flex max-h-[80vh] items-center justify-center bg-black p-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={imageUrl}
+            alt="生成图片预览"
+            className="max-h-[75vh] w-auto rounded-lg object-contain"
+          />
+        </div>
       </div>
     </div>
   );
@@ -912,7 +956,7 @@ function ShareModal({
 function CreatePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-2");
+  const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-1.5");
   const [outputType, setOutputType] = useState<OutputType>("image");
   const [videoDuration, setVideoDuration] = useState<number>(10);
   const [prompt, setPrompt] = useState("");
@@ -934,6 +978,7 @@ function CreatePageContent() {
   const [promptError, setPromptError] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [previewVideoUrl, setPreviewVideoUrl] = useState<string | null>(null);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [credits, setCredits] = useState(0);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -1238,6 +1283,63 @@ function CreatePageContent() {
     ]
   );
 
+  // ── GPT Image 1.5 real generation (synchronous) ──────────────────────────
+
+  const startGptImage1_5Generation = useCallback(
+    async (promptText: string) => {
+      setGenerationError("");
+
+      const token = await getToken();
+      if (!token) {
+        setIsGenerating(false);
+        setGenerationError("认证失败，请重新登录");
+        return;
+      }
+
+      try {
+        const submitRes = await fetch("/api/generate-video", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-image-1.5",
+            prompt: promptText,
+            aspectRatio,
+          }),
+        });
+
+        const submitData = await submitRes.json();
+
+        if (!submitData.success) {
+          throw new Error(submitData.error || "图片生成失败");
+        }
+
+        // Success — refresh data from server
+        await refreshCredits();
+        await refreshGenerations();
+
+        setIsGenerating(false);
+        setPrompt("");
+
+        // Scroll to recent projects
+        requestAnimationFrame(() => {
+          const el = document.getElementById("recent-projects");
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      } catch (err) {
+        setIsGenerating(false);
+        setGenerationError(
+          err instanceof Error ? err.message : "图片生成失败"
+        );
+      }
+    },
+    [aspectRatio, getToken, refreshCredits, refreshGenerations]
+  );
+
   // ── Handle Generate ──────────────────────────────────────────────────────
 
   const handleGenerate = useCallback(() => {
@@ -1273,6 +1375,12 @@ function CreatePageContent() {
     setPromptError("");
     setGenerationError("");
     setIsGenerating(true);
+
+    // GPT Image 1.5 → real OpenAI API
+    if (selectedModel.id === "gpt-image-1.5") {
+      startGptImage1_5Generation(prompt.trim());
+      return;
+    }
 
     // Seedance 2.0 → real API
     if (selectedModel.id === "seedance-2") {
@@ -1321,6 +1429,7 @@ function CreatePageContent() {
     selectedModel,
     outputType,
     startSeedanceGeneration,
+    startGptImage1_5Generation,
     isInsufficientCredits,
     currentCost,
     isLoggedIn,
@@ -1538,6 +1647,41 @@ function CreatePageContent() {
     }
   }, [getToken]);
 
+  // ── Handle "New Project" — reset to blank input state ───────────────────
+
+  const handleNewProject = useCallback(() => {
+    // Clear prompt
+    setPrompt("");
+    setPromptError("");
+    setGenerationError("");
+
+    // Clear generation state
+    setIsGenerating(false);
+    setActiveScene(null);
+
+    // Stop polling if active
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    // Close all modals
+    setShowLoginModal(false);
+    setShowPurchaseModal(false);
+    setPurchaseResult(null);
+    setPurchaseError("");
+    setPreviewVideoUrl(null);
+    setPreviewImageUrl(null);
+    closeShareModal();
+    setShareSuccessMsg("");
+
+    // Scroll to top creation area & focus prompt
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      promptInputRef.current?.focus();
+    });
+  }, [closeShareModal]);
+
   // ── Loading state ────────────────────────────────────────────────────────
 
   if (isLoading) {
@@ -1559,6 +1703,14 @@ function CreatePageContent() {
         <VideoPreviewModal
           videoUrl={previewVideoUrl}
           onClose={() => setPreviewVideoUrl(null)}
+        />
+      )}
+
+      {/* ── Image Preview Modal ───────────────────────────────────────── */}
+      {previewImageUrl && (
+        <ImagePreviewModal
+          imageUrl={previewImageUrl}
+          onClose={() => setPreviewImageUrl(null)}
         />
       )}
 
@@ -2064,7 +2216,10 @@ function CreatePageContent() {
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
               {/* New project card */}
-              <button className="group flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border/40 bg-card/30 text-text-muted transition-all duration-200 hover:border-accent-violet/30 hover:bg-accent-violet/5 hover:text-accent-violet-light">
+              <button
+                onClick={handleNewProject}
+                className="group cursor-pointer flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border/40 bg-card/30 text-text-muted transition-all duration-200 hover:border-accent-violet/30 hover:bg-accent-violet/5 hover:text-accent-violet-light"
+              >
                 <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border/40 bg-card/50 transition-all duration-200 group-hover:border-accent-violet/30 group-hover:bg-accent-violet/10">
                   <Plus className="h-5 w-5" />
                 </div>
@@ -2079,7 +2234,14 @@ function CreatePageContent() {
                 >
                   {/* Thumbnail */}
                   <div className="relative mb-3 flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-accent-violet/10 to-accent-violet/5">
-                    {gen.cover_url ? (
+                    {gen.cover_url && gen.output_type === "image" ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={gen.cover_url}
+                        alt={gen.prompt}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : gen.cover_url ? (
                       <Image
                         src={gen.cover_url}
                         alt={gen.prompt}
@@ -2124,7 +2286,27 @@ function CreatePageContent() {
 
                   {/* Actions */}
                   <div className="mt-2 flex items-center gap-1.5 border-t border-border/20 pt-2">
-                    {gen.video_url ? (
+                    {gen.video_url && gen.output_type === "image" ? (
+                      <>
+                        <button
+                          onClick={() => setPreviewImageUrl(gen.video_url!)}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                        >
+                          <ImageIcon className="h-3 w-3" />
+                          预览
+                        </button>
+                        <a
+                          href={gen.video_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          download={gen.prompt ? `${gen.prompt.slice(0, 30)}.png` : "image.png"}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                        >
+                          <Download className="h-3 w-3" />
+                          下载
+                        </a>
+                      </>
+                    ) : gen.video_url ? (
                       <>
                         <button
                           onClick={() => setPreviewVideoUrl(gen.video_url!)}

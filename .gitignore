@@ -27,6 +27,9 @@ yarn-error.log*
 *.swp
 *.swo
 
+# Generated assets (images from OpenAI, etc.)
+public/generated/
+
 # OS
 .DS_Store
 Thumbs.db
