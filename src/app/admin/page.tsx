@@ -387,6 +387,13 @@ export default function AdminDashboardPage() {
                 刷新
               </button>
               <button
+                onClick={() => router.push("/admin/users")}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs font-medium text-violet-300 transition-all hover:bg-violet-500/20"
+              >
+                <Users className="h-3.5 w-3.5" />
+                用户管理
+              </button>
+              <button
                 onClick={() => router.push("/admin/recharge")}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs font-medium text-violet-300 transition-all hover:bg-violet-500/20"
               >
