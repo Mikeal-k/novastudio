@@ -17,6 +17,7 @@ import {
   Clock,
   Search,
   Filter,
+  BarChart3,
 } from "lucide-react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -350,7 +351,7 @@ export default function AdminRechargePage() {
     <div className="min-h-screen bg-[#0a0a0f]">
       <div className="mx-auto max-w-5xl px-4 py-8">
         {/* Header */}
-        <div className="mb-8 text-center">
+        <div className="mb-6 text-center">
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500/20 to-violet-500/5">
             <Shield className="h-6 w-6 text-violet-400" />
           </div>
@@ -358,6 +359,13 @@ export default function AdminRechargePage() {
           <p className="mt-1 text-sm text-gray-500">
             人工确认充值订单，手动为用户加积分
           </p>
+          <button
+            onClick={() => router.push("/admin")}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-300 transition-all hover:bg-violet-500/20"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            返回后台总览
+          </button>
         </div>
 
         {/* Admin info bar */}
