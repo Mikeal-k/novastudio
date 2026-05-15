@@ -1,6 +1,8 @@
 import { NextRequest } from "next/server";
 import { queryVideoTask } from "@/lib/seedance";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import fs from "fs";
+import path from "path";
 
 export async function GET(
   _request: NextRequest,
@@ -60,30 +62,135 @@ export async function GET(
 
     switch (result.status) {
       case "pending":
-      case "running":
+      case "running": {
+        // ── Timeout check: if task has been running > 10 min, mark as failed ──
+        const createdAt = new Date(generation.created_at).getTime();
+        const now = Date.now();
+        const TEN_MINUTES_MS = 10 * 60 * 1000;
+
+        if (now - createdAt > TEN_MINUTES_MS && !generation.charged_at) {
+          console.log(
+            `[seedance/query] Task ${taskId} timed out (created at ${generation.created_at}, status ${generation.status})`
+          );
+
+          await adminClient
+            .from("generations")
+            .update({
+              status: "failed",
+              error: "生成超时，请重新生成。未扣除积分。",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", generation.id);
+
+          return Response.json({
+            success: false,
+            status: "failed",
+            error: "生成超时，请重新生成。未扣除积分。",
+          });
+        }
+
         return Response.json({
           success: true,
           status: result.status,
         });
+      }
 
       case "succeeded": {
-        const videoUrl = result.result?.video_url ?? null;
-        const coverUrl = result.result?.cover_url ?? null;
+        const tempVideoUrl = result.result?.video_url ?? null;
+        const tempCoverUrl = result.result?.cover_url ?? null;
 
-        // Update generation record
+        // ── Download video and cover to local storage ──────────────────
+        let localVideoUrl: string | null = null;
+        let localCoverUrl: string | null = null;
+        let downloadFailed = false;
+
+        if (tempVideoUrl) {
+          try {
+            const fileName = `generation-${generation.id}.mp4`;
+            const relativeDir = "generated/seedance";
+            const publicDir = path.join(process.cwd(), "public", relativeDir);
+            const filePath = path.join(publicDir, fileName);
+
+            console.log(`[seedance/query] Downloading video from: ${tempVideoUrl}`);
+            console.log(`[seedance/query] Saving to: ${filePath}`);
+
+            fs.mkdirSync(publicDir, { recursive: true });
+
+            const response = await fetch(tempVideoUrl);
+            if (!response.ok) {
+              throw new Error(`Failed to download video: HTTP ${response.status}`);
+            }
+
+            const arrayBuffer = await response.arrayBuffer();
+            fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+
+            localVideoUrl = `/${relativeDir}/${fileName}`;
+            console.log(`[seedance/query] Video saved: ${localVideoUrl}`);
+          } catch (downloadErr) {
+            console.error(`[seedance/query] Failed to download video:`, downloadErr);
+            downloadFailed = true;
+          }
+        }
+
+        if (tempCoverUrl && !downloadFailed) {
+          try {
+            const ext = tempCoverUrl.match(/\.(png|jpg|jpeg|webp|gif)(\?|$)/i)?.[1] || "jpg";
+            const coverFileName = `generation-${generation.id}-cover.${ext}`;
+            const relativeDir = "generated/seedance";
+            const publicDir = path.join(process.cwd(), "public", relativeDir);
+            const coverFilePath = path.join(publicDir, coverFileName);
+
+            console.log(`[seedance/query] Downloading cover from: ${tempCoverUrl}`);
+
+            fs.mkdirSync(publicDir, { recursive: true });
+
+            const coverResponse = await fetch(tempCoverUrl);
+            if (!coverResponse.ok) {
+              throw new Error(`Failed to download cover: HTTP ${coverResponse.status}`);
+            }
+
+            const coverArrayBuffer = await coverResponse.arrayBuffer();
+            fs.writeFileSync(coverFilePath, Buffer.from(coverArrayBuffer));
+
+            localCoverUrl = `/${relativeDir}/${coverFileName}`;
+            console.log(`[seedance/query] Cover saved: ${localCoverUrl}`);
+          } catch (downloadErr) {
+            console.error(`[seedance/query] Failed to download cover:`, downloadErr);
+            // Cover download failure is non-fatal — still use video
+            localCoverUrl = null;
+          }
+        }
+
+        // ── If download failed, mark as failed — do NOT deduct credits ─
+        if (downloadFailed) {
+          await adminClient
+            .from("generations")
+            .update({
+              status: "failed",
+              error: "视频保存失败，请重新生成",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", generation.id);
+
+          return Response.json({
+            success: true,
+            status: "failed",
+            error: "视频保存失败，请重新生成",
+          });
+        }
+
+        // ── Update generation record ───────────────────────────────────
         const updates: Record<string, unknown> = {
           status: "succeeded",
-          video_url: videoUrl,
-          cover_url: coverUrl,
+          video_url: localVideoUrl || tempVideoUrl,
+          cover_url: localCoverUrl || tempCoverUrl,
           updated_at: new Date().toISOString(),
         };
 
         // ── Idempotent credit deduction ────────────────────────────────
-        // Only deduct credits if not already charged
         if (!generation.charged_at) {
           const cost = generation.cost;
 
-          // Deduct credits from profile
           const { data: profile } = await adminClient
             .from("profiles")
             .select("credits")
@@ -120,8 +227,8 @@ export async function GET(
         return Response.json({
           success: true,
           status: "succeeded",
-          videoUrl,
-          coverUrl,
+          videoUrl: localVideoUrl || tempVideoUrl,
+          coverUrl: localCoverUrl || tempCoverUrl,
         });
       }
 

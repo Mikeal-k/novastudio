@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { submitVideoGeneration, getGenerationCost } from "@/lib/seedance";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import { optimizeImagePrompt } from "@/lib/prompt-optimizer";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import https from "https";
 import fs from "fs";
@@ -144,7 +145,7 @@ export async function POST(request: NextRequest) {
 
     // ── Parse request body ──────────────────────────────────────────────
     const body = await request.json();
-    const { prompt, aspectRatio, duration, quality, style, model: bodyModel } = body;
+    const { prompt, aspectRatio, duration, quality, style, model: bodyModel, audioSfx, audioMusic, referenceImageDataUrl } = body;
 
     if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
       return Response.json(
@@ -155,12 +156,40 @@ export async function POST(request: NextRequest) {
 
     const modelId = bodyModel || "seedance-2";
 
+    // ── Validate referenceImageDataUrl (only for Seedance 2.0) ──────────
+    const hasReferenceImage = modelId === "seedance-2" && typeof referenceImageDataUrl === "string" && referenceImageDataUrl.length > 0;
+    if (hasReferenceImage) {
+      // Must be a data URL
+      if (!referenceImageDataUrl.startsWith("data:image/")) {
+        return Response.json(
+          { success: false, error: "参考图格式无效，请上传 PNG/JPG/WebP 图片" },
+          { status: 400 }
+        );
+      }
+      if (!referenceImageDataUrl.includes(";base64,")) {
+        return Response.json(
+          { success: false, error: "参考图格式无效，请上传 PNG/JPG/WebP 图片" },
+          { status: 400 }
+        );
+      }
+      // Limit to 8MB
+      if (referenceImageDataUrl.length > 8 * 1024 * 1024) {
+        return Response.json(
+          { success: false, error: "参考图文件过大，请使用 8MB 以内的图片" },
+          { status: 400 }
+        );
+      }
+      console.log(`[generate-video] referenceImage=true referenceImageLength=${referenceImageDataUrl.length}`);
+    }
+
     // ────────────────────────────────────────────────────────────────────
-    // GPT Image 1.5 → OpenAI 图片生成
+    // GPT Image 1.5 / GPT Image 2 → OpenAI 图片生成
     // ────────────────────────────────────────────────────────────────────
     if (modelId === "gpt-image-1.5" || modelId === "gpt-image-2") {
+      const displayName = modelId === "gpt-image-2" ? "GPT Image 2" : "GPT Image 1.5";
+
       const calculatedCost = getGenerationCost({
-        modelId: "gpt-image-1.5",
+        modelId,
         outputType: "image",
       });
 
@@ -193,7 +222,7 @@ export async function POST(request: NextRequest) {
         .from("generations")
         .insert({
           user_id: user.id,
-          model: "GPT Image 1.5",
+          model: displayName,
           prompt: prompt.trim(),
           output_type: "image",
           status: "running",
@@ -213,10 +242,9 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // ── Call OpenAI gpt-image-1.5 API ────────────────────────────────
+      // ── Call OpenAI images API ───────────────────────────────────────
       const openaiApiKey = process.env.OPENAI_API_KEY;
       if (!openaiApiKey) {
-        // Mark generation as failed
         await adminClient
           .from("generations")
           .update({ status: "failed", error: "未配置 OPENAI_API_KEY" })
@@ -230,11 +258,18 @@ export async function POST(request: NextRequest) {
 
       const size = mapAspectRatioToSize(aspectRatio ?? "1:1");
 
+      // ── Optimize prompt for stability (GPT Image only) ────────────────
+      const optimizedResult = optimizeImagePrompt(prompt, modelId);
+      const optimizedPrompt = optimizedResult.optimized;
+      console.log(
+        `[generate-video] prompt optimize: enabled=${optimizedResult.enabled} rawLength=${optimizedResult.rawLength} optimizedLength=${optimizedResult.optimizedLength} model=${modelId}`
+      );
+
       let openaiResult: OpenAIImageResult;
       try {
         openaiResult = await postOpenAIImageGeneration({
-          model: "gpt-image-1.5",
-          prompt: prompt.trim(),
+          model: modelId,
+          prompt: optimizedPrompt,
           size,
           quality: "low",
           output_format: "webp",
@@ -395,7 +430,7 @@ export async function POST(request: NextRequest) {
             amount: -calculatedCost,
             balance_after: newBalance,
             generation_id: generation.id,
-            description: "GPT Image 1.5 图片生成扣费",
+            description: `${displayName} 图片生成扣费`,
           });
 
           // Update charged_at after successful deduction
@@ -405,7 +440,7 @@ export async function POST(request: NextRequest) {
             .eq("id", generation.id);
         }
 
-        console.log(`[generate-video] GPT Image 1.5 generation succeeded: ${shortUrl}`);
+        console.log(`[generate-video] ${displayName} generation succeeded: ${shortUrl}`);
 
         return Response.json({
           success: true,
@@ -441,7 +476,7 @@ export async function POST(request: NextRequest) {
             amount: -calculatedCost,
             balance_after: newBalance,
             generation_id: generation.id,
-            description: "GPT Image 1.5 图片生成扣费",
+            description: `${displayName} 图片生成扣费`,
           });
         }
 
@@ -519,6 +554,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Determine audio settings ─────────────────────────────────────────
+    const useAudioSfx = audioSfx === true;
+    const useAudioMusic = audioMusic === true;
+    const generateAudio = useAudioSfx || useAudioMusic;
+
+    // Build settings object for generation record
+    const generationSettings: Record<string, unknown> = {
+      aspectRatio: aspectRatio ?? "16:9",
+      duration: duration ?? 10,
+      quality: quality ?? "标准",
+      style: style ?? "真实质感",
+    };
+    // Record reference image info (not the full data URL)
+    if (hasReferenceImage) {
+      generationSettings.hasReferenceImage = true;
+      generationSettings.referenceImageMode = "data_url";
+    }
+    if (generateAudio) {
+      generationSettings.audioSfx = useAudioSfx;
+      generationSettings.audioMusic = useAudioMusic;
+      generationSettings.generateAudio = true;
+    }
+
     // ── Create generation record (status: running) ──────────────────────
     const { data: generation, error: genError } = await adminClient
       .from("generations")
@@ -529,12 +587,7 @@ export async function POST(request: NextRequest) {
         output_type: "video",
         status: "running",
         cost: calculatedCost,
-        settings: {
-          aspectRatio: aspectRatio ?? "16:9",
-          duration: duration ?? 10,
-          quality: quality ?? "标准",
-          style: style ?? "真实质感",
-        },
+        settings: generationSettings,
       })
       .select("id")
       .single();
@@ -552,6 +605,10 @@ export async function POST(request: NextRequest) {
       prompt: prompt.trim(),
       aspectRatio,
       duration,
+      generateAudio,
+      audioSfx: useAudioSfx,
+      audioMusic: useAudioMusic,
+      ...(hasReferenceImage ? { referenceImageDataUrl } : {}),
     });
 
     // ── Update generation record with task_id ───────────────────────────

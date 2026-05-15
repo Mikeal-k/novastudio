@@ -1,15 +1,8 @@
 import { NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
+import { RECHARGE_PACKAGE_MAP } from "@/lib/pricing";
 
-// ─── Server-side package definitions (NOT trusted from frontend) ────────────
-
-const PACKAGES = {
-  experience: { name: "体验包", amountYuan: 29.9, credits: 150 },
-  standard: { name: "标准包", amountYuan: 69.9, credits: 400 },
-  pro: { name: "专业包", amountYuan: 199, credits: 1200 },
-} as const;
-
-type PackageId = keyof typeof PACKAGES;
+type PackageId = string;
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,14 +34,14 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as { packageId?: string };
     const packageId = body.packageId as PackageId | undefined;
 
-    if (!packageId || !(packageId in PACKAGES)) {
+    if (!packageId || !RECHARGE_PACKAGE_MAP.has(packageId)) {
       return Response.json(
         { success: false, error: "无效的套餐 ID" },
         { status: 400 }
       );
     }
 
-    const pkg = PACKAGES[packageId];
+    const pkg = RECHARGE_PACKAGE_MAP.get(packageId)!;
 
     // ── 3. Create recharge order ───────────────────────────────────────
     const { data: order, error: insertError } = await adminClient

@@ -12,10 +12,19 @@
  *   SEEDANCE_MODEL  — Model identifier (e.g. doubao-seedance-2-0-260128)
  */
 
+import {
+  MODEL_CREDIT_COSTS,
+  SEEDANCE_DURATION_COST,
+  SEEDANCE_DURATIONS,
+} from "@/lib/pricing";
+
+// Re-export for convenience
+export { SEEDANCE_DURATION_COST, SEEDANCE_DURATIONS };
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface GenerationCostParams {
-  /** Model identifier (e.g. "seedance-2", "grok-imagine", "gpt-image-2") */
+  /** Model identifier (e.g. "seedance-2", "gpt-image-1.5", "gpt-image-2") */
   modelId: string;
   /** Output type: "image" or "video" */
   outputType: "image" | "video";
@@ -30,8 +39,16 @@ export interface SeedanceSubmitRequest {
   prompt: string;
   /** Aspect ratio: "1:1", "9:16", or "16:9" */
   aspectRatio?: string;
-  /** Duration in seconds: 5, 10, 15, or 30 */
+  /** Duration in seconds: 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, or 15 */
   duration?: number;
+  /** Whether to generate audio (AI sound effects + background music) */
+  generateAudio?: boolean;
+  /** Enable AI sound effects (环境声、动作声、机械声等) */
+  audioSfx?: boolean;
+  /** Enable AI background music (原创背景音乐和氛围音乐) */
+  audioMusic?: boolean;
+  /** Data URL of a reference image for image-to-video generation (Seedance 2.0 only) */
+  referenceImageDataUrl?: string;
 }
 
 export interface SeedanceSubmitResponse {
@@ -108,11 +125,11 @@ function mapAspectRatio(ratio: string): string {
 
 /**
  * Map our frontend duration (seconds) to Seedance API value.
- * Seedance 2.0 supports durations in seconds.
+ * Only the durations defined in SEEDANCE_DURATIONS are valid.
  * If the requested duration is not supported, use the nearest valid value.
  */
 function mapDuration(duration: number): number {
-  const valid = [5, 10, 15, 30];
+  const valid = SEEDANCE_DURATIONS;
   if (valid.includes(duration)) return duration;
   // Find nearest valid duration
   const nearest = valid.reduce((prev, curr) =>
@@ -124,29 +141,37 @@ function mapDuration(duration: number): number {
 // ─── Generation Cost Calculation ────────────────────────────────────────────
 
 /**
- * Base credit costs for each model (image output).
- * For video models, this is the base cost for 10s + 标准 quality.
+ * Base credit costs for image models.
+ * For video models (Seedance), costs are directly mapped by duration.
  */
 const MODEL_BASE_COST: Record<string, number> = {
-  "gpt-image-1.5": 5,
-  "gpt-image-2": 5,
+  "gpt-image-1.5": MODEL_CREDIT_COSTS["gpt-image-1.5"],
+  "gpt-image-2": MODEL_CREDIT_COSTS["gpt-image-2"],
   "nano-banana-pro": 8,
   "design": 10,
   "branding": 15,
   "ecommerce": 12,
-  "seedance-2": 150,
+  "seedance-2": 0, // Seedance uses direct duration map, not base cost
   "grok-imagine": 25,
   "video": 20,
 };
 
 /**
- * Duration multiplier for video generation.
+ * Duration multiplier for video generation using base cost formula.
+ * This is only used for non-Seedance video models. Seedance uses direct cost map.
  */
 const DURATION_MULTIPLIER: Record<number, number> = {
+  4: 0.4,
   5: 0.6,
+  7: 0.8,
+  8: 0.9,
+  9: 1,
   10: 1,
+  11: 1.1,
+  12: 1.2,
+  13: 1.3,
+  14: 1.4,
   15: 1.5,
-  30: 3,
 };
 
 /**
@@ -161,16 +186,28 @@ const QUALITY_MULTIPLIER: Record<string, number> = {
 /**
  * Calculate the credit cost for a generation request.
  *
+ * For Seedance 2.0, costs are directly mapped by duration (no quality multiplier).
  * For image models, returns the base cost directly.
- * For video models, applies duration and quality multipliers:
+ * For other video models, applies duration and quality multipliers:
  *   Math.ceil(baseCost * durationMultiplier * qualityMultiplier)
  *
  * @example
- * getGenerationCost({ modelId: "seedance-2", outputType: "video", duration: 15, quality: "高清" })
- * // => Math.ceil(30 * 1.5 * 1.5) = 68
+ * getGenerationCost({ modelId: "seedance-2", outputType: "video", duration: 10 })
+ * // => 93
  */
 export function getGenerationCost(params: GenerationCostParams): number {
   const { modelId, outputType, duration, quality } = params;
+
+  // Seedance 2.0: direct duration-based cost
+  if (modelId === "seedance-2") {
+    const dur = duration ?? 10;
+    const cost = SEEDANCE_DURATION_COST[dur];
+    if (cost !== undefined) return cost;
+    // Fallback: find nearest valid duration
+    const nearest = mapDuration(dur);
+    return SEEDANCE_DURATION_COST[nearest] ?? 93;
+  }
+
   const baseCost = MODEL_BASE_COST[modelId] ?? 0;
 
   // Image models: no duration/quality multipliers
@@ -178,7 +215,7 @@ export function getGenerationCost(params: GenerationCostParams): number {
     return baseCost;
   }
 
-  // Video models: apply multipliers
+  // Video models (non-Seedance): apply multipliers
   const dur = duration ?? 10;
   const q = quality ?? "标准";
 
@@ -224,17 +261,46 @@ export async function submitVideoGeneration(
     : 10;
 
   // Build the text prompt with parameters appended
-  const text = `${request.prompt} --ratio ${ratio} --fps 24 --dur ${durationSeconds}`;
+  let prompt = request.prompt;
 
-  const body = {
-    model,
-    content: [
-      {
-        type: "text",
-        text,
+  // Enhance prompt with audio descriptions if audio features are enabled
+  if (request.generateAudio || request.audioSfx || request.audioMusic) {
+    if (request.audioSfx) {
+      prompt += " 包含真实环境声、动作声、自然声或机械声，声音与画面同步。";
+    }
+    if (request.audioMusic) {
+      prompt += " 包含原创背景音乐和氛围音乐，音乐风格自然，不引用任何现有歌曲。";
+    }
+  }
+
+  const text = `${prompt} --ratio ${ratio} --fps 24 --dur ${durationSeconds}`;
+
+  // Build content array — text prompt always first, optional image reference second
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text,
+    },
+  ];
+
+  if (request.referenceImageDataUrl) {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: request.referenceImageDataUrl,
       },
-    ],
+    });
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    content,
   };
+
+  // Add generate_audio flag when audio features are enabled
+  if (request.generateAudio) {
+    body.generate_audio = true;
+  }
 
   const url = `${baseUrl}/contents/generations/tasks`;
   console.log(`[seedance] POST ${url}`);

@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
       .select("*")
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
-      .limit(10);
+      .limit(50);
 
     if (genError) {
       console.error("[api/generations] Failed to fetch generations:", genError);
@@ -51,6 +51,7 @@ export async function GET(request: NextRequest) {
         ...item,
 
         // camelCase fields for the next UI step
+        taskId: item.task_id ?? null,
         isPublic: item.is_public ?? false,
         publicTitle: item.public_title ?? null,
         publicDescription: item.public_description ?? null,

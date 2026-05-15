@@ -1,13 +1,17 @@
 "use client";
 
+"use client";
+
 import { useState, useCallback, useRef, useEffect, useMemo, Suspense } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { getGenerationCost } from "@/lib/seedance";
+import { getGenerationCost, SEEDANCE_DURATIONS } from "@/lib/seedance";
+import { RECHARGE_PACKAGES } from "@/lib/pricing";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { AccountDropdown } from "@/components/AccountDropdown";
 import {
   Sparkles,
   Image as ImageIcon,
@@ -28,11 +32,13 @@ import {
   FileText,
   AlertCircle,
   Play,
-  LogOut,
   Loader2,
   User,
   Copy,
   Check,
+  Eye,
+  Volume2,
+  Music,
 } from "lucide-react";
 
 // ─── Type definitions ───────────────────────────────────────────────────────
@@ -63,6 +69,16 @@ const models: ModelOption[] = [
     status: "real",
   },
   {
+    id: "gpt-image-2",
+    name: "GPT Image 2",
+    category: "图片生成",
+    description: "新一代图片生成模型，效果更佳",
+    supportedOutputs: ["image"],
+    generateLabel: () => "生成图片",
+    resultMessage: () => "图片已生成",
+    status: "real",
+  },
+  {
     id: "seedance-2",
     name: "Seedance 2.0",
     category: "视频生成",
@@ -72,71 +88,9 @@ const models: ModelOption[] = [
     resultMessage: () => "视频已生成",
     status: "real",
   },
-  {
-    id: "grok-imagine",
-    name: "Grok Imagine",
-    category: "图片/视频创意生成",
-    description: "适合创意图片、短视频灵感、图生视频和社媒内容",
-    supportedOutputs: ["image", "video"],
-    generateLabel: (outputType: OutputType) =>
-      outputType === "image" ? "生成图片" : "生成视频",
-    resultMessage: (outputType: OutputType) =>
-      outputType === "image" ? "图片已生成" : "视频草稿已生成",
-    status: "mock",
-  },
-  {
-    id: "nano-banana-pro",
-    name: "Nano Banana Pro",
-    category: "图片增强",
-    description: "适合图片优化、风格化、细节修复",
-    supportedOutputs: ["image"],
-    generateLabel: () => "生成图片",
-    resultMessage: () => "图片已生成",
-    status: "mock",
-  },
-  {
-    id: "design",
-    name: "Design",
-    category: "设计模式",
-    description: "适合海报、品牌视觉、落地页概念图",
-    supportedOutputs: ["image"],
-    generateLabel: () => "生成图片",
-    resultMessage: () => "图片已生成",
-    status: "mock",
-  },
-  {
-    id: "branding",
-    name: "Branding",
-    category: "品牌模式",
-    description: "适合生成统一风格的一组视觉素材",
-    supportedOutputs: ["image"],
-    generateLabel: () => "生成图片",
-    resultMessage: () => "图片已生成",
-    status: "mock",
-  },
-  {
-    id: "ecommerce",
-    name: "E-Commerce",
-    category: "电商模式",
-    description: "适合商品主图、详情图、带货素材",
-    supportedOutputs: ["image"],
-    generateLabel: () => "生成图片",
-    resultMessage: () => "图片已生成",
-    status: "mock",
-  },
-  {
-    id: "video",
-    name: "Video",
-    category: "视频模式",
-    description: "适合短视频脚本画面、广告视频草案",
-    supportedOutputs: ["video"],
-    generateLabel: () => "生成视频",
-    resultMessage: () => "视频草稿已生成",
-    status: "mock",
-  },
 ];
 
-const videoDurations = [5, 10, 15, 30];
+const videoDurations = SEEDANCE_DURATIONS;
 const aspectRatios = [
   { label: "1:1", value: "1:1" },
   { label: "9:16", value: "9:16" },
@@ -161,20 +115,6 @@ interface ScenePreset {
 }
 
 const scenePresets: ScenePreset[] = [
-  {
-    key: "branding",
-    label: "品牌识别",
-    prompt:
-      "为一个新消费品牌设计一套品牌识别系统，包含 Logo 方向、品牌色彩、字体风格、视觉元素和社交媒体应用场景，风格高级、简洁、有商业质感。",
-    modelId: "branding",
-  },
-  {
-    key: "landing",
-    label: "落地页设计",
-    prompt:
-      "为一个 AI 产品设计高转化落地页首屏，包含主标题、副标题、CTA 按钮、产品展示区和信任背书，深色高级科技风，适合官网使用。",
-    modelId: "design",
-  },
   {
     key: "poster",
     label: "海报设计",
@@ -212,15 +152,8 @@ interface DBGeneration {
   publicCategory?: string | null;
   publishedAt?: string | null;
   likesCount?: number;
+  taskId?: string | null;
 }
-
-// ─── Credit packages ────────────────────────────────────────────────────────
-
-const creditPackages = [
-  { name: "体验包", price: "¥29.9", credits: 150, popular: false, description: "可生成 1 条 10 秒标准视频" },
-  { name: "标准包", price: "¥69.9", credits: 400, popular: true, description: "适合连续生成 2-4 条短视频" },
-  { name: "专业包", price: "¥199", credits: 1200, popular: false, description: "适合批量生成短视频素材" },
-];
 
 // ─── Video Preview Modal ─────────────────────────────────────────────────────
 
@@ -514,11 +447,7 @@ function PurchaseModal({
 
   if (!open) return null;
 
-  const packages = [
-    { id: "experience", name: "体验包", price: "¥29.9", credits: 150, popular: false },
-    { id: "standard", name: "标准包", price: "¥69.9", credits: 400, popular: true },
-    { id: "pro", name: "专业包", price: "¥199", credits: 1200, popular: false },
-  ];
+  const packages = RECHARGE_PACKAGES;
 
   return (
     <div
@@ -951,10 +880,121 @@ function ShareModal({
   );
 }
 
+// ─── Add Script Modal ────────────────────────────────────────────────────────
+
+function AddScriptModal({
+  open,
+  onClose,
+  scriptContent,
+  onScriptChange,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  scriptContent: string;
+  onScriptChange: (val: string) => void;
+  onSave: () => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    if (open) {
+      document.addEventListener("keydown", handleEsc);
+      document.body.style.overflow = "hidden";
+      // Focus textarea after modal opens
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+    return () => {
+      document.removeEventListener("keydown", handleEsc);
+      document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative mx-4 w-full max-w-lg animate-fade-in-scale">
+        {/* Glow */}
+        <div className="pointer-events-none absolute -inset-1 rounded-2xl bg-gradient-to-br from-accent-violet/30 via-transparent to-accent-violet/10 opacity-70 blur-xl" />
+
+        <div className="relative rounded-2xl border border-border/50 bg-card/80 p-6 backdrop-blur-xl shadow-2xl shadow-black/20">
+          {/* Close button */}
+          <button
+            onClick={onClose}
+            className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-text-muted transition-colors hover:bg-card/60 hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          {/* Icon & Title */}
+          <div className="mb-4 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-violet/20 to-accent-violet/5">
+              <FileText className="h-6 w-6 text-accent-violet-light" />
+            </div>
+            <h2 className="text-lg font-bold text-foreground">添加脚本</h2>
+            <p className="mt-1 text-sm text-text-secondary">
+              输入脚本内容，将自动添加到 prompt 中
+            </p>
+          </div>
+
+          {/* Textarea */}
+          <textarea
+            ref={textareaRef}
+            value={scriptContent}
+            onChange={(e) => onScriptChange(e.target.value)}
+            placeholder="输入你的脚本内容..."
+            rows={8}
+            className="w-full resize-none rounded-xl border border-border/30 bg-card/30 px-4 py-3 text-sm text-foreground placeholder:text-text-muted/60 outline-none transition-colors focus:border-accent-violet/40"
+          />
+
+          {/* Actions */}
+          <div className="mt-4 flex gap-3">
+            <button
+              onClick={onClose}
+              className="flex-1 rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+            >
+              取消
+            </button>
+            <button
+              onClick={onSave}
+              disabled={!scriptContent.trim()}
+              className="flex-1 rounded-xl bg-gradient-to-r from-accent-violet to-accent-violet-light px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              保存并使用
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Utility: Convert File to Data URL ──────────────────────────────────────
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("图片读取失败"));
+    };
+    reader.onerror = () => reject(new Error("图片读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 // ─── Main Component ─────────────────────────────────────────────────────────
 
 function CreatePageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [selectedModelId, setSelectedModelId] = useState<string>("gpt-image-1.5");
   const [outputType, setOutputType] = useState<OutputType>("image");
@@ -981,6 +1021,8 @@ function CreatePageContent() {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [credits, setCredits] = useState(0);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -992,8 +1034,23 @@ function CreatePageContent() {
   const [sharePublishing, setSharePublishing] = useState(false);
   const [shareError, setShareError] = useState("");
   const [shareSuccessMsg, setShareSuccessMsg] = useState("");
+  const [showAllGenerations, setShowAllGenerations] = useState(false);
+  const [audioSfx, setAudioSfx] = useState(false);
+  const [audioMusic, setAudioMusic] = useState(false);
+  const [refreshingTaskIds, setRefreshingTaskIds] = useState<Set<string>>(new Set());
+  const [toastMessage, setToastMessage] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
+  const autoCheckDoneRef = useRef(false);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Reference image state ───────────────────────────────────────────────
+  const [referenceImages, setReferenceImages] = useState<Array<{ id: string; file: File; previewUrl: string }>>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [refImageError, setRefImageError] = useState("");
+
+  // ── Script modal state ──────────────────────────────────────────────────
+  const [showScriptModal, setShowScriptModal] = useState(false);
+  const [scriptContent, setScriptContent] = useState("");
 
   const supabase = createBrowserSupabaseClient();
 
@@ -1043,13 +1100,15 @@ function CreatePageContent() {
         const token = session?.access_token;
 
         if (token) {
-          // Fetch credits
+          // Fetch profile data from /api/me
           const meRes = await fetch("/api/me", {
             headers: { Authorization: `Bearer ${token}` },
           });
           const meData = await meRes.json();
           if (meData.success) {
             setCredits(meData.profile.credits);
+            setDisplayName(meData.user.displayName ?? null);
+            setAvatarUrl(meData.user.avatarUrl ?? null);
           }
 
           // Fetch recent generations
@@ -1074,6 +1133,13 @@ function CreatePageContent() {
       cancelled = true;
     };
   }, [supabase]);
+
+  // Auto-dismiss toast message after 3 seconds
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => setToastMessage(null), 3000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -1121,8 +1187,23 @@ function CreatePageContent() {
     return session?.access_token ?? null;
   }, [supabase]);
 
-  // ── Refresh credits from server ──────────────────────────────────────────
+  // ── Refresh profile data from server ────────────────────────────────────
 
+  const refreshProfile = useCallback(async () => {
+    const token = await getToken();
+    if (!token) return;
+    const res = await fetch("/api/me", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (data.success) {
+      setCredits(data.profile.credits);
+      setDisplayName(data.user.displayName ?? null);
+      setAvatarUrl(data.user.avatarUrl ?? null);
+    }
+  }, [getToken]);
+
+  // Keep refreshCredits as alias for backward compatibility
   const refreshCredits = useCallback(async () => {
     const token = await getToken();
     if (!token) return;
@@ -1148,6 +1229,79 @@ function CreatePageContent() {
       setRecentGenerations(data.generations ?? []);
     }
   }, [getToken]);
+
+  // ── Refresh a single Seedance task status ────────────────────────────────
+
+  const handleRefreshTaskStatus = useCallback(
+    async (gen: DBGeneration) => {
+      const taskId = gen.taskId;
+      if (!taskId) return;
+
+      // Mark this task as refreshing
+      setRefreshingTaskIds((prev) => new Set(prev).add(taskId));
+
+      try {
+        const token = await getToken();
+        if (!token) {
+          setToastMessage({ type: "error", text: "认证失败，请重新登录" });
+          return;
+        }
+
+        const res = await fetch(`/api/generate-video/${taskId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+
+        if (data.status === "succeeded" || data.success === true) {
+          setToastMessage({ type: "success", text: "视频生成成功！" });
+          await refreshGenerations();
+        } else if (data.status === "failed") {
+          setToastMessage({
+            type: "error",
+            text: data.error || "视频生成失败",
+          });
+          await refreshGenerations();
+        } else {
+          // Still running / pending
+          setToastMessage({
+            type: "info",
+            text: "仍在生成中，请稍后再试",
+          });
+        }
+      } catch (err) {
+        setToastMessage({
+          type: "error",
+          text: err instanceof Error ? err.message : "查询任务状态失败",
+        });
+      } finally {
+        setRefreshingTaskIds((prev) => {
+          const next = new Set(prev);
+          next.delete(taskId);
+          return next;
+        });
+      }
+    },
+    [getToken, refreshGenerations]
+  );
+
+  // ── Auto-check running Seedance tasks once after generations load ────────
+
+  useEffect(() => {
+    if (autoCheckDoneRef.current) return;
+    if (!isLoggedIn) return;
+
+    const runningSeedanceTask = recentGenerations.find(
+      (g) =>
+        (g.status === "running" || g.status === "pending") &&
+        g.model === "Seedance 2.0" &&
+        g.taskId
+    );
+
+    if (runningSeedanceTask) {
+      autoCheckDoneRef.current = true;
+      handleRefreshTaskStatus(runningSeedanceTask);
+    }
+  }, [recentGenerations, isLoggedIn, handleRefreshTaskStatus]);
 
   // ── Seedance real generation ─────────────────────────────────────────────
 
@@ -1177,6 +1331,18 @@ function CreatePageContent() {
       }
 
       try {
+        // Convert reference image to data URL (if present, take the first one)
+        let referenceImageDataUrl: string | undefined;
+        if (referenceImages.length > 0) {
+          try {
+            referenceImageDataUrl = await fileToDataUrl(referenceImages[0].file);
+          } catch {
+            setIsGenerating(false);
+            setGenerationError("参考图读取失败，请重新选择图片");
+            return;
+          }
+        }
+
         // Step 1: Submit the task
         const submitRes = await fetch("/api/generate-video", {
           method: "POST",
@@ -1190,6 +1356,9 @@ function CreatePageContent() {
             duration: videoDuration,
             quality: selectedClarity,
             style: selectedStyle,
+            audioSfx: audioSfx || undefined,
+            audioMusic: audioMusic || undefined,
+            ...(referenceImageDataUrl ? { referenceImageDataUrl } : {}),
           }),
         });
 
@@ -1280,6 +1449,9 @@ function CreatePageContent() {
       getToken,
       refreshCredits,
       refreshGenerations,
+      audioSfx,
+      audioMusic,
+      referenceImages,
     ]
   );
 
@@ -1305,6 +1477,63 @@ function CreatePageContent() {
           },
           body: JSON.stringify({
             model: "gpt-image-1.5",
+            prompt: promptText,
+            aspectRatio,
+          }),
+        });
+
+        const submitData = await submitRes.json();
+
+        if (!submitData.success) {
+          throw new Error(submitData.error || "图片生成失败");
+        }
+
+        // Success — refresh data from server
+        await refreshCredits();
+        await refreshGenerations();
+
+        setIsGenerating(false);
+        setPrompt("");
+
+        // Scroll to recent projects
+        requestAnimationFrame(() => {
+          const el = document.getElementById("recent-projects");
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      } catch (err) {
+        setIsGenerating(false);
+        setGenerationError(
+          err instanceof Error ? err.message : "图片生成失败"
+        );
+      }
+    },
+    [aspectRatio, getToken, refreshCredits, refreshGenerations]
+  );
+
+  // ── GPT Image 2 real generation (synchronous, same pattern as 1.5) ──────
+
+  const startGptImage2Generation = useCallback(
+    async (promptText: string) => {
+      setGenerationError("");
+
+      const token = await getToken();
+      if (!token) {
+        setIsGenerating(false);
+        setGenerationError("认证失败，请重新登录");
+        return;
+      }
+
+      try {
+        const submitRes = await fetch("/api/generate-video", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-image-2",
             prompt: promptText,
             aspectRatio,
           }),
@@ -1382,47 +1611,17 @@ function CreatePageContent() {
       return;
     }
 
+    // GPT Image 2 → real OpenAI API
+    if (selectedModel.id === "gpt-image-2") {
+      startGptImage2Generation(prompt.trim());
+      return;
+    }
+
     // Seedance 2.0 → real API
     if (selectedModel.id === "seedance-2") {
       startSeedanceGeneration(prompt.trim());
       return;
     }
-
-    // All other models → mock (deduct credits locally for mock)
-    // Show experience mode notice for mock models
-    if (selectedModel.status === "mock") {
-      setGenerationError("当前为体验模式，真实生成能力即将接入。");
-      setIsGenerating(false);
-      return;
-    }
-
-    setTimeout(() => {
-      selectedModel.resultMessage(outputType);
-      const gen: DBGeneration = {
-        id: String(Date.now()),
-        model: selectedModel.name,
-        prompt: prompt.trim(),
-        output_type: outputType,
-        status: "succeeded",
-        cost: currentCost,
-        video_url: null,
-        cover_url: null,
-        error: null,
-        created_at: new Date().toISOString(),
-      };
-      setCredits((prev) => prev - currentCost);
-      setRecentGenerations((prev) => [gen, ...prev]);
-      setIsGenerating(false);
-      setPrompt("");
-
-      // Scroll to recent projects after DOM update
-      requestAnimationFrame(() => {
-        const el = document.getElementById("recent-projects");
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      });
-    }, 1500);
   }, [
     prompt,
     isGenerating,
@@ -1430,18 +1629,12 @@ function CreatePageContent() {
     outputType,
     startSeedanceGeneration,
     startGptImage1_5Generation,
+    startGptImage2Generation,
     isInsufficientCredits,
     currentCost,
     isLoggedIn,
     credits,
   ]);
-
-  // ── Logout ───────────────────────────────────────────────────────────────
-
-  const handleLogout = useCallback(async () => {
-    await supabase.auth.signOut();
-    router.push("/auth");
-  }, [supabase, router]);
 
   const handleBuyClick = () => {
     if (!isLoggedIn) {
@@ -1647,6 +1840,84 @@ function CreatePageContent() {
     }
   }, [getToken]);
 
+  // ── Reference image handlers ─────────────────────────────────────────────
+
+  const handleAddReferenceImage = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setRefImageError("");
+
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      setRefImageError("文件大小超过 5MB 限制，请选择较小的图片");
+      // Reset input
+      e.target.value = "";
+      return;
+    }
+
+    // Validate file type
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      setRefImageError("仅支持 PNG、JPG、JPEG、WebP 格式");
+      e.target.value = "";
+      return;
+    }
+
+    // Create local preview URL
+    const previewUrl = URL.createObjectURL(file);
+    const id = `ref-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    setReferenceImages((prev) => [...prev, { id, file, previewUrl }]);
+
+    // Reset input so same file can be selected again
+    e.target.value = "";
+  }, []);
+
+  const handleRemoveReferenceImage = useCallback((id: string) => {
+    setReferenceImages((prev) => {
+      const img = prev.find((img) => img.id === id);
+      if (img) {
+        URL.revokeObjectURL(img.previewUrl);
+      }
+      return prev.filter((img) => img.id !== id);
+    });
+  }, []);
+
+  // ── Script handlers ─────────────────────────────────────────────────────
+
+  const handleOpenScriptModal = useCallback(() => {
+    setScriptContent("");
+    setShowScriptModal(true);
+  }, []);
+
+  const handleSaveScript = useCallback(() => {
+    const trimmed = scriptContent.trim();
+    if (!trimmed) return;
+
+    setPrompt((prev) => {
+      const scriptBlock = `\n\n脚本内容：\n${trimmed}`;
+      if (prev.trim()) {
+        return prev + scriptBlock;
+      }
+      return trimmed;
+    });
+
+    setShowScriptModal(false);
+    setScriptContent("");
+
+    // Focus prompt input after saving
+    requestAnimationFrame(() => {
+      promptInputRef.current?.focus();
+    });
+  }, [scriptContent]);
+
   // ── Handle "New Project" — reset to blank input state ───────────────────
 
   const handleNewProject = useCallback(() => {
@@ -1654,6 +1925,13 @@ function CreatePageContent() {
     setPrompt("");
     setPromptError("");
     setGenerationError("");
+
+    // Clear reference images
+    setReferenceImages((prev) => {
+      prev.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      return [];
+    });
+    setRefImageError("");
 
     // Clear generation state
     setIsGenerating(false);
@@ -1751,12 +2029,46 @@ function CreatePageContent() {
         onConfirm={handlePublish}
       />
 
+      {/* ── Add Script Modal ────────────────────────────────────────── */}
+      <AddScriptModal
+        open={showScriptModal}
+        onClose={() => {
+          setShowScriptModal(false);
+          setScriptContent("");
+        }}
+        scriptContent={scriptContent}
+        onScriptChange={setScriptContent}
+        onSave={handleSaveScript}
+      />
+
       {/* ── Share Success Toast ──────────────────────────────────────── */}
       {shareSuccessMsg && (
         <div className="fixed bottom-6 left-1/2 z-[200] -translate-x-1/2 animate-fade-in-scale">
           <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm font-medium text-emerald-400 shadow-lg backdrop-blur-sm">
             <Check className="h-4 w-4" />
             {shareSuccessMsg}
+          </div>
+        </div>
+      )}
+
+      {/* ── Task Status Toast ───────────────────────────────────────── */}
+      {toastMessage && (
+        <div className="fixed bottom-20 left-1/2 z-[200] -translate-x-1/2 animate-fade-in-scale">
+          <div
+            className={cn(
+              "flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium shadow-lg backdrop-blur-sm",
+              toastMessage.type === "success" &&
+                "border-emerald-500/20 bg-emerald-500/10 text-emerald-400",
+              toastMessage.type === "error" &&
+                "border-red-400/20 bg-red-400/10 text-red-400",
+              toastMessage.type === "info" &&
+                "border-accent-violet/20 bg-accent-violet/10 text-accent-violet-light"
+            )}
+          >
+            {toastMessage.type === "success" && <Check className="h-4 w-4" />}
+            {toastMessage.type === "error" && <AlertCircle className="h-4 w-4" />}
+            {toastMessage.type === "info" && <RefreshCw className="h-4 w-4" />}
+            {toastMessage.text}
           </div>
         </div>
       )}
@@ -1786,25 +2098,24 @@ function CreatePageContent() {
       {/* ── Header ──────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4 sm:px-6">
-          <Link href="/" className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              window.scrollTo({ top: 0, behavior: "smooth" });
+              promptInputRef.current?.focus();
+            }}
+            className="flex items-center gap-2"
+          >
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-accent-violet to-accent-violet-light">
               <span className="text-xs font-bold text-white">N</span>
             </div>
             <span className="text-base font-semibold text-foreground">
               Nova Studio
             </span>
-          </Link>
+          </button>
 
           <div className="flex items-center gap-3">
             {isLoggedIn ? (
               <>
-                {/* User email */}
-                {userEmail && (
-                  <span className="hidden text-xs text-text-muted sm:block">
-                    {userEmail}
-                  </span>
-                )}
-
                 {/* Credits display */}
                 <div className="flex items-center gap-1.5 rounded-full border border-border/50 bg-card/60 px-3 py-1.5 text-xs font-medium text-text-secondary backdrop-blur-sm">
                   <Coins className="h-3.5 w-3.5 text-amber-400" />
@@ -1829,15 +2140,14 @@ function CreatePageContent() {
                   购买积分
                 </Button>
 
-                {/* Logout */}
-                <button
-                  onClick={handleLogout}
-                  className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
-                  title="退出登录"
-                >
-                  <LogOut className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">退出</span>
-                </button>
+                {/* Account Dropdown */}
+                <AccountDropdown
+                  email={userEmail ?? ""}
+                  credits={credits}
+                  displayName={displayName}
+                  avatarUrl={avatarUrl}
+                  onRefresh={refreshProfile}
+                />
               </>
             ) : (
               <>
@@ -1930,11 +2240,25 @@ function CreatePageContent() {
               {/* Bottom bar */}
               <div className="flex items-center justify-between border-t border-border/30 px-4 py-3 sm:px-5">
                 <div className="flex items-center gap-2">
-                  <button className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/40 px-3 py-1.5 text-xs font-medium text-text-secondary transition-all hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light">
+                  {/* Hidden file input for reference images */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={handleFileChange}
+                  />
+                  <button
+                    onClick={handleAddReferenceImage}
+                    className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/40 px-3 py-1.5 text-xs font-medium text-text-secondary transition-all hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                  >
                     <ImageUp className="h-3.5 w-3.5" />
                     添加参考图
                   </button>
-                  <button className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/40 px-3 py-1.5 text-xs font-medium text-text-secondary transition-all hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light">
+                  <button
+                    onClick={handleOpenScriptModal}
+                    className="flex items-center gap-1.5 rounded-lg border border-border/40 bg-card/40 px-3 py-1.5 text-xs font-medium text-text-secondary transition-all hover:border-accent-violet/30 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                  >
                     <FileText className="h-3.5 w-3.5" />
                     添加脚本
                   </button>
@@ -1970,6 +2294,53 @@ function CreatePageContent() {
                 </Button>
               </div>
             </div>
+
+            {/* ── Reference Image Preview ──────────────────────────────── */}
+            {referenceImages.length > 0 && (
+              <div className="mt-3">
+                <div className="mb-2 flex items-center gap-1.5">
+                  <ImageUp className="h-3.5 w-3.5 text-accent-violet-light" />
+                  <span className="text-xs font-medium text-text-secondary">参考图</span>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  {referenceImages.map((img) => (
+                    <div key={img.id} className="group relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={img.previewUrl}
+                        alt="参考图"
+                        className="h-16 w-16 rounded-lg border border-border/40 object-cover sm:h-20 sm:w-20"
+                      />
+                      <button
+                        onClick={() => handleRemoveReferenceImage(img.id)}
+                        className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-border/40 bg-card text-text-muted shadow-sm transition-all hover:bg-card-hover hover:text-foreground opacity-0 group-hover:opacity-100"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-[10px] text-text-muted">
+                  {selectedModel.id === "seedance-2"
+                    ? "参考图已添加，生成视频时将作为画面参考。"
+                    : "参考图已添加，当前图片模型暂仅作为创作素材预览。"}
+                </p>
+              </div>
+            )}
+
+            {/* ── Reference image error ──────────────────────────────────── */}
+            {refImageError && (
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-2.5 text-xs text-red-400">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{refImageError}</span>
+                <button
+                  onClick={() => setRefImageError("")}
+                  className="ml-auto shrink-0 text-red-400/60 transition-colors hover:text-red-400"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Cost indicator */}
             <div className="mt-2 flex items-center justify-end gap-1.5 text-xs text-text-muted">
@@ -2020,12 +2391,15 @@ function CreatePageContent() {
             </h2>
             <div className="flex flex-wrap gap-2">
               {models.map((model) => {
-                const modelCost = getGenerationCost({
-                  modelId: model.id,
-                  outputType: model.supportedOutputs[0],
-                  duration: videoDuration,
-                  quality: selectedClarity,
-                });
+                const modelCost =
+                  model.id === "seedance-2"
+                    ? null // show range instead
+                    : getGenerationCost({
+                        modelId: model.id,
+                        outputType: model.supportedOutputs[0],
+                        duration: videoDuration,
+                        quality: selectedClarity,
+                      });
                 return (
                   <button
                     key={model.id}
@@ -2039,9 +2413,15 @@ function CreatePageContent() {
                   >
                     <span className="flex items-center gap-2">
                       {model.name}
-                      <span className="text-[10px] opacity-60">
-                        {modelCost}pt
-                      </span>
+                      {model.id === "seedance-2" ? (
+                        <span className="text-[10px] opacity-60">
+                          38-148pt
+                        </span>
+                      ) : (
+                        <span className="text-[10px] opacity-60">
+                          {modelCost}pt
+                        </span>
+                      )}
                     </span>
                   </button>
                 );
@@ -2071,8 +2451,28 @@ function CreatePageContent() {
                     : "bg-amber-500/10 text-amber-400"
                 )}
               >
-                {selectedModel.status === "real" ? "真实生成" : "体验模式 · 即将接入"}
+                {selectedModel.status === "real"
+                  ? "真实生成"
+                  : selectedModel.id === "gpt-image-2"
+                    ? "即将开放"
+                    : "体验模式 · 即将接入"}
               </span>
+
+              {/* Reference image indicator — only for Seedance 2.0 when reference image is present */}
+              {selectedModel.id === "seedance-2" && referenceImages.length > 0 && (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-accent-violet/10 px-2 py-0.5 text-[10px] font-medium text-accent-violet-light">
+                  <ImageUp className="h-3 w-3" />
+                  将参考图片生成视频
+                </span>
+              )}
+
+              {/* Audio indicator — only for Seedance 2.0 when audio is enabled */}
+              {selectedModel.id === "seedance-2" && (audioSfx || audioMusic) && (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-accent-violet/10 px-2 py-0.5 text-[10px] font-medium text-accent-violet-light">
+                  <Volume2 className="h-3 w-3" />
+                  将生成带音轨的视频
+                </span>
+              )}
             </div>
           </section>
 
@@ -2152,67 +2552,128 @@ function CreatePageContent() {
                 </div>
               </div>
 
-              {/* Video Duration (conditional) */}
-              <div>
-                <label className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-muted">
-                  <Clock className="h-3.5 w-3.5" />
-                  视频时长
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {videoDurations.map((dur) => (
-                    <button
-                      key={dur}
-                      onClick={() => setVideoDuration(dur)}
+              {/* Video Duration (video models only) */}
+              {selectedModel.supportedOutputs.includes("video") && (
+                <div>
+                  <label className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-muted">
+                    <Clock className="h-3.5 w-3.5" />
+                    视频时长
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {videoDurations.map((dur) => (
+                      <button
+                        key={dur}
+                        onClick={() => setVideoDuration(dur)}
+                        className={cn(
+                          "rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200",
+                          videoDuration === dur
+                            ? "border-accent-violet/30 bg-accent-violet/15 text-accent-violet-light"
+                            : "border-border/50 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:text-foreground"
+                        )}
+                      >
+                        {dur}秒
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Audio settings — only for Seedance 2.0 */}
+              {selectedModel.id === "seedance-2" && (
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <label className="mb-2 flex items-center gap-1.5 text-xs font-medium text-text-muted">
+                    <Volume2 className="h-3.5 w-3.5" />
+                    AI 音频设置
+                  </label>
+                  <div className="flex flex-wrap gap-4">
+                    {/* AI音效 toggle */}
+                    <label
                       className={cn(
-                        "rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-200",
-                        videoDuration === dur
+                        "flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-2.5 transition-all duration-200",
+                        audioSfx
                           ? "border-accent-violet/30 bg-accent-violet/15 text-accent-violet-light"
                           : "border-border/50 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:text-foreground"
                       )}
                     >
-                      {dur}秒
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={audioSfx}
+                        onClick={() => setAudioSfx(!audioSfx)}
+                        className={cn(
+                          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-violet/40",
+                          audioSfx ? "bg-accent-violet-light" : "bg-border/60"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200",
+                            audioSfx ? "translate-x-4" : "translate-x-0"
+                          )}
+                        />
+                      </button>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium">AI音效</span>
+                        <span className="text-[10px] text-text-muted/70">生成环境声、动作声、机械声等</span>
+                      </div>
+                    </label>
 
-            {/* Output type toggle for Grok Imagine */}
-            {selectedModel.supportedOutputs.length > 1 && (
-              <div className="mt-4 flex items-center gap-3 border-t border-border/20 pt-4">
-                <span className="text-xs font-medium text-text-muted">
-                  输出类型：
-                </span>
-                <div className="inline-flex overflow-hidden rounded-lg border border-border/60 bg-card p-0.5">
-                  {selectedModel.supportedOutputs.map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setOutputType(type)}
+                    {/* AI音乐 toggle */}
+                    <label
                       className={cn(
-                        "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-200",
-                        outputType === type
-                          ? "bg-accent-violet/15 text-accent-violet-light shadow-sm"
-                          : "text-text-muted hover:text-foreground"
+                        "flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-2.5 transition-all duration-200",
+                        audioMusic
+                          ? "border-accent-violet/30 bg-accent-violet/15 text-accent-violet-light"
+                          : "border-border/50 bg-card/40 text-text-secondary hover:border-accent-violet/20 hover:text-foreground"
                       )}
                     >
-                      {type === "image" ? (
-                        <ImageIcon className="h-3.5 w-3.5" />
-                      ) : (
-                        <Video className="h-3.5 w-3.5" />
-                      )}
-                      {type === "image" ? "图片" : "视频"}
-                    </button>
-                  ))}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={audioMusic}
+                        onClick={() => setAudioMusic(!audioMusic)}
+                        className={cn(
+                          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-violet/40",
+                          audioMusic ? "bg-accent-violet-light" : "bg-border/60"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200",
+                            audioMusic ? "translate-x-4" : "translate-x-0"
+                          )}
+                        />
+                      </button>
+                      <div className="flex flex-col">
+                        <span className="flex items-center gap-1 text-xs font-medium">
+                          <Music className="h-3 w-3" />
+                          AI音乐
+                        </span>
+                        <span className="text-[10px] text-text-muted/70">生成原创背景音乐和氛围音乐</span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </section>
 
           {/* ── Recent Projects ──────────────────────────────────────── */}
           <section id="recent-projects" className="mb-10">
-            <h2 className="mb-4 text-lg font-semibold text-foreground">
-              最近项目
-            </h2>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-foreground">
+                最近项目
+              </h2>
+              <Link
+                href="/gallery"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-accent-violet/20 bg-accent-violet/10 px-3 py-1.5 text-xs font-medium text-accent-violet-light transition-all hover:bg-accent-violet/20"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                公开作品
+              </Link>
+            </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
               {/* New project card */}
@@ -2227,7 +2688,7 @@ function CreatePageContent() {
               </button>
 
               {/* Recent generation cards from DB (only when logged in) */}
-              {isLoggedIn && recentGenerations.slice(0, 4).map((gen) => (
+              {isLoggedIn && (showAllGenerations ? recentGenerations : recentGenerations.slice(0, 8)).map((gen) => (
                 <div
                   key={gen.id}
                   className="group animate-fade-in-scale flex flex-col rounded-xl border border-border/40 bg-gradient-to-br from-card/70 to-card/40 p-4 backdrop-blur-sm transition-all duration-200 hover:border-accent-violet/20 hover:shadow-lg hover:shadow-accent-violet/5"
@@ -2274,7 +2735,17 @@ function CreatePageContent() {
                       {gen.model}
                     </p>
                     <p className="mt-0.5 text-[10px] text-text-muted">
-                      {gen.status === "succeeded" ? "生成成功" : gen.status === "running" ? "生成中..." : "生成失败"}
+                      {gen.status === "succeeded"
+                        ? "生成成功"
+                        : gen.status === "running" || gen.status === "pending"
+                          ? gen.model === "Seedance 2.0"
+                            ? "生成中，可刷新状态"
+                            : "生成中..."
+                          : gen.status === "failed" && gen.error
+                            ? gen.error.length > 30
+                              ? gen.error.slice(0, 30) + "..."
+                              : gen.error
+                            : "生成失败"}
                     </p>
                     <p className="mt-0.5 text-[10px] text-text-muted">
                       {new Date(gen.created_at).toLocaleTimeString("zh-CN", {
@@ -2284,90 +2755,150 @@ function CreatePageContent() {
                     </p>
                   </div>
 
-                  {/* Actions */}
-                  <div className="mt-2 flex items-center gap-1.5 border-t border-border/20 pt-2">
-                    {gen.video_url && gen.output_type === "image" ? (
-                      <>
+                  {/* Actions — two rows to ensure share always visible */}
+                  <div className="mt-2 flex flex-col gap-1 border-t border-border/20 pt-2">
+                    {/* Row 1: Preview / Download / Refresh Status */}
+                    <div className="flex items-center gap-1.5">
+                      {(gen.status === "running" || gen.status === "pending") &&
+                      gen.model === "Seedance 2.0" &&
+                      gen.taskId ? (
                         <button
-                          onClick={() => setPreviewImageUrl(gen.video_url!)}
-                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                          onClick={() => handleRefreshTaskStatus(gen)}
+                          disabled={refreshingTaskIds.has(gen.taskId)}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light disabled:opacity-40"
                         >
-                          <ImageIcon className="h-3 w-3" />
-                          预览
+                          <RefreshCw
+                            className={cn(
+                              "h-3 w-3",
+                              refreshingTaskIds.has(gen.taskId) && "animate-spin"
+                            )}
+                          />
+                          {refreshingTaskIds.has(gen.taskId) ? "查询中..." : "刷新状态"}
                         </button>
-                        <a
-                          href={gen.video_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          download={gen.prompt ? `${gen.prompt.slice(0, 30)}.png` : "image.png"}
-                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                        >
-                          <Download className="h-3 w-3" />
-                          下载
-                        </a>
-                      </>
-                    ) : gen.video_url ? (
-                      <>
+                      ) : gen.cover_url && gen.output_type === "image" ? (
+                        <>
+                          <button
+                            onClick={() => setPreviewImageUrl(gen.cover_url!)}
+                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                          >
+                            <ImageIcon className="h-3 w-3" />
+                            预览
+                          </button>
+                          <a
+                            href={gen.cover_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            download={gen.prompt ? `${gen.prompt.slice(0, 30)}.png` : "image.png"}
+                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                          >
+                            <Download className="h-3 w-3" />
+                            下载
+                          </a>
+                        </>
+                      ) : gen.video_url ? (
+                        gen.model === "Seedance 2.0" && !gen.video_url.startsWith("/") ? (
+                          /* Old expired Seedance URL — cannot preview/download */
+                          <span className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-amber-400/70">
+                            <AlertCircle className="h-3 w-3" />
+                            视频链接已过期，请再次生成
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setPreviewVideoUrl(gen.video_url!)}
+                              className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                            >
+                              <Play className="h-3 w-3" />
+                              预览
+                            </button>
+                            <a
+                              href={gen.video_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download
+                              className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                            >
+                              <Download className="h-3 w-3" />
+                              下载
+                            </a>
+                          </>
+                        )
+                      ) : gen.status !== "running" && gen.status !== "pending" ? (
+                        <span className="text-[10px] text-text-muted">{gen.error || "等待生成"}</span>
+                      ) : null}
+                      {/* Only show "再次生成" for non-running items or non-Seedance items */}
+                      {(gen.status !== "running" && gen.status !== "pending") ||
+                      gen.model !== "Seedance 2.0" ? (
                         <button
-                          onClick={() => setPreviewVideoUrl(gen.video_url!)}
+                          onClick={() => {
+                            setPrompt(gen.prompt);
+                            requestAnimationFrame(() => {
+                              window.scrollTo({ top: 0, behavior: "smooth" });
+                              promptInputRef.current?.focus();
+                            });
+                          }}
                           className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
                         >
-                          <Play className="h-3 w-3" />
-                          预览
+                          <Repeat className="h-3 w-3" />
+                          再次生成
                         </button>
-                        <a
-                          href={gen.video_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          download
+                      ) : null}
+                    </div>
+                    {/* Row 2: Share / Unshare */}
+                    <div className="flex items-center gap-1.5">
+                      {gen.isPublic ? (
+                        <>
+                          <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-400">
+                            <Send className="h-3 w-3" />
+                            已公开
+                          </span>
+                          <button
+                            onClick={() => handleUnpublish(gen.id)}
+                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
+                          >
+                            取消分享
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => openShareModal(gen)}
                           className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
                         >
-                          <Download className="h-3 w-3" />
-                          下载
-                        </a>
-                      </>
-                    ) : (
-                      <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
-                        <Download className="h-3 w-3" />
-                        下载
-                      </button>
-                    )}
-                    <button className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light">
-                      <Repeat className="h-3 w-3" />
-                      再次生成
-                    </button>
-                    {gen.isPublic ? (
-                      <>
-                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[10px] font-medium text-emerald-400">
                           <Send className="h-3 w-3" />
-                          已公开
-                        </span>
-                        <button
-                          onClick={() => handleUnpublish(gen.id)}
-                          className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
-                        >
-                          取消分享
+                          分享作品
                         </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => openShareModal(gen)}
-                        className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                      >
-                        <Send className="h-3 w-3" />
-                        分享作品
-                      </button>
-                    )}
+                      )}
+                    </div>
                   </div>
                 </div>
               ))}
 
-              {/* Placeholder cards — show all 4 when not logged in, or fill remaining when logged in */}
-              {Array.from({
-                length: isLoggedIn
-                  ? Math.max(0, 4 - recentGenerations.length)
-                  : 4,
-              }).map((_, i) => (
+              {/* Placeholder cards — show all 8 when not logged in, or fill remaining when logged in */}
+              {isLoggedIn && !showAllGenerations && recentGenerations.length > 8 && (
+                <div className="col-span-full flex justify-center pt-2">
+                  <button
+                    onClick={() => setShowAllGenerations(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-card/40 px-5 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/5 hover:text-accent-violet-light"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    查看全部项目
+                  </button>
+                </div>
+              )}
+
+              {isLoggedIn && showAllGenerations && recentGenerations.length > 8 && (
+                <div className="col-span-full flex justify-center pt-2">
+                  <button
+                    onClick={() => setShowAllGenerations(false)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-border/40 bg-card/40 px-5 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/5 hover:text-accent-violet-light"
+                  >
+                    收起
+                  </button>
+                </div>
+              )}
+
+              {/* Placeholder cards when not logged in */}
+              {!isLoggedIn && Array.from({ length: 8 }).map((_, i) => (
                 <div
                   key={`placeholder-${i}`}
                   className="flex flex-col rounded-xl border border-border/20 bg-gradient-to-br from-card/30 to-card/10 p-4 backdrop-blur-sm"
@@ -2402,11 +2933,12 @@ function CreatePageContent() {
               </div>
 
               <div className="mt-6 grid gap-4 sm:grid-cols-3">
-                {creditPackages.map((pkg) => (
+                {RECHARGE_PACKAGES.map((pkg) => (
                   <div
-                    key={pkg.name}
+                    key={pkg.id}
+                    onClick={handleBuyClick}
                     className={cn(
-                      "relative rounded-xl border p-5 text-center transition-all duration-200",
+                      "relative rounded-xl border p-5 text-center transition-all duration-200 cursor-pointer",
                       pkg.popular
                         ? "border-accent-violet/40 bg-accent-violet/10 shadow-lg shadow-accent-violet/5"
                         : "border-border/40 bg-card/50 hover:border-accent-violet/20"
@@ -2440,7 +2972,7 @@ function CreatePageContent() {
                       variant={pkg.popular ? "default" : "outline"}
                       size="sm"
                       className={cn(
-                        "mt-4 w-full",
+                        "mt-4 w-full pointer-events-auto",
                         pkg.popular
                           ? "bg-gradient-to-r from-accent-violet to-accent-violet-light text-white"
                           : "border-accent-violet/20 text-accent-violet-light"

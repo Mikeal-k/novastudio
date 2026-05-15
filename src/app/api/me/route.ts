@@ -64,16 +64,34 @@ export async function GET(request: NextRequest) {
         description: "新用户注册赠送积分",
       });
 
+      const displayName = user.user_metadata?.display_name ?? null;
+      const avatarUrl = user.user_metadata?.avatar_url ?? null;
+
       return Response.json({
         success: true,
-        user: { id: user.id, email: user.email },
+        user: {
+          id: user.id,
+          email: user.email,
+          displayName,
+          avatarUrl,
+          plan: "Free",
+        },
         profile: { credits: newProfile.credits },
       });
     }
 
+    const displayName = user.user_metadata?.display_name ?? null;
+    const avatarUrl = user.user_metadata?.avatar_url ?? null;
+
     return Response.json({
       success: true,
-      user: { id: user.id, email: user.email },
+      user: {
+        id: user.id,
+        email: user.email,
+        displayName,
+        avatarUrl,
+        plan: "Free",
+      },
       profile: { credits: profile.credits },
     });
   } catch (error) {
