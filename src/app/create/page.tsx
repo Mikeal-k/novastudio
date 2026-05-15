@@ -349,6 +349,15 @@ interface PurchaseResult {
   credits: number;
 }
 
+interface ExistingOrderInfo {
+  id: string;
+  packageName: string;
+  amount: number;
+  credits: number;
+  status: string;
+  createdAt: string;
+}
+
 function PurchaseModal({
   open,
   onClose,
@@ -358,6 +367,7 @@ function PurchaseModal({
   onSelectPackage,
   onCopyOrderId,
   copied,
+  existingOrder,
 }: {
   open: boolean;
   onClose: () => void;
@@ -367,6 +377,7 @@ function PurchaseModal({
   onSelectPackage: (packageId: string) => void;
   onCopyOrderId: (orderId: string) => void;
   copied: boolean;
+  existingOrder: ExistingOrderInfo | null;
 }) {
   // ── Proof upload state ──────────────────────────────────────────────────
   const [proofFile, setProofFile] = useState<File | null>(null);
@@ -633,6 +644,54 @@ function PurchaseModal({
               >
                 关闭
               </button>
+            </div>
+          ) : existingOrder ? (
+            /* ── Existing Order Warning ──────────────────────────── */
+            <div className="text-center">
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/20">
+                <AlertCircle className="h-7 w-7 text-amber-400" />
+              </div>
+              <h2 className="text-lg font-bold text-foreground">已有待确认订单</h2>
+              <p className="mt-2 text-sm text-text-secondary">
+                你已有待确认订单，请等待管理员审核。请勿重复创建订单。
+              </p>
+
+              <div className="mt-4 rounded-xl border border-border/30 bg-card/50 p-4 text-left text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-text-muted">套餐</span>
+                  <span className="font-medium text-foreground">{existingOrder.packageName}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">金额</span>
+                  <span className="font-medium text-foreground">¥{existingOrder.amount}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">积分</span>
+                  <span className="font-medium text-amber-400">{existingOrder.credits} 积分</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">状态</span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-400">
+                    <Clock className="h-3 w-3" />
+                    待确认
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-text-muted">创建时间</span>
+                  <span className="text-xs text-gray-400">
+                    {new Date(existingOrder.createdAt).toLocaleString("zh-CN")}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-3 flex gap-3">
+                <button
+                  onClick={onClose}
+                  className="flex-1 rounded-xl border border-border/40 bg-card/40 px-4 py-2.5 text-sm font-medium text-text-secondary transition-all hover:border-accent-violet/20 hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                >
+                  关闭
+                </button>
+              </div>
             </div>
           ) : (
             /* ── Package Selection ─────────────────────────────────── */
@@ -1014,6 +1073,7 @@ function CreatePageContent() {
     credits: number;
   } | null>(null);
   const [purchaseError, setPurchaseError] = useState("");
+  const [existingOrder, setExistingOrder] = useState<ExistingOrderInfo | null>(null);
   const [copied, setCopied] = useState(false);
   const [promptError, setPromptError] = useState("");
   const [generationError, setGenerationError] = useState("");
@@ -1643,6 +1703,7 @@ function CreatePageContent() {
     }
     setPurchaseResult(null);
     setPurchaseError("");
+    setExistingOrder(null);
     setShowPurchaseModal(true);
   };
 
@@ -1670,7 +1731,15 @@ function CreatePageContent() {
 
       const data = await res.json();
 
-      if (data.success) {
+      if (res.status === 409) {
+        // User already has a pending order
+        if (data.existingOrder) {
+          setExistingOrder(data.existingOrder);
+        } else {
+          setPurchaseError(data.error || "你已有待确认订单");
+        }
+        setPurchaseResult(null);
+      } else if (data.success) {
         // Compatible with both data.orderId and data.order.id
         const orderId = data.orderId || data.order?.id;
         if (!orderId) {
@@ -1999,6 +2068,7 @@ function CreatePageContent() {
           setShowPurchaseModal(false);
           setPurchaseResult(null);
           setPurchaseError("");
+          setExistingOrder(null);
         }}
         purchaseLoading={purchaseLoading}
         purchaseResult={purchaseResult}
@@ -2006,6 +2076,7 @@ function CreatePageContent() {
         onSelectPackage={handlePurchasePackage}
         onCopyOrderId={handleCopyOrderId}
         copied={copied}
+        existingOrder={existingOrder}
       />
 
       {/* ── Share Modal ───────────────────────────────────────────── */}

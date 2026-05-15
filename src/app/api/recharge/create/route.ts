@@ -30,7 +30,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 2. Validate package ────────────────────────────────────────────
+    // ── 2. Check for existing pending orders ──────────────────────────
+    const { data: existingOrders } = await adminClient
+      .from("recharge_orders")
+      .select("id, package_name, amount_yuan, credits, status, created_at")
+      .eq("user_id", user.id)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (existingOrders && existingOrders.length > 0) {
+      const existing = existingOrders[0];
+      return Response.json(
+        {
+          success: false,
+          error: "你已有待确认订单，请等待管理员审核后再购买。",
+          existingOrder: {
+            id: existing.id,
+            packageName: existing.package_name,
+            amount: existing.amount_yuan,
+            credits: existing.credits,
+            status: existing.status,
+            createdAt: existing.created_at,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // ── 3. Validate package ────────────────────────────────────────────
     const body = (await request.json()) as { packageId?: string };
     const packageId = body.packageId as PackageId | undefined;
 
