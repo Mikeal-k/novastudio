@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Nova Studio — AI-Powered Design Platform",
+  title: "顺维数字科技工作室 | Nova Studio — AI 图片与视频创意生成服务",
   description:
-    "Transform your ideas into stunning designs with the power of AI. Describe what you need, and watch it come to life in seconds.",
+    "顺维数字科技工作室（Nova Studio）提供 AI 图片生成、AI 视频生成、数字内容制作、创意设计辅助等服务，帮助个人和企业快速制作商品图、海报、封面、短视频素材和创意分镜。",
 };
 
 export default function RootLayout({
