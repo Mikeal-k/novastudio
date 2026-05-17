@@ -32,6 +32,17 @@ interface OpenAIImageRequestBody {
   output_format: string;
   output_compression?: number;
   n: number;
+  /**
+   * NOTE: response_format is intentionally omitted here.
+   *
+   * Verified via scripts/test-openai-image-url-mode.cjs:
+   *   GPT Image 2 returns HTTP 400 "Unknown parameter: 'response_format'"
+   *   when response_format: "url" is passed. This model ONLY supports
+   *   b64_json output — there is no supported "small response" mode.
+   *
+   * All generation requests use b64_json, and truncation safeguards
+   * (compression retry, content-length integrity check) are in place.
+   */
 }
 
 interface OpenAIImageResult {
@@ -48,68 +59,170 @@ async function postOpenAIImageGeneration(
 
   const bodyStr = JSON.stringify(body);
 
+  // Use a stable generation id for tracing in logs
+  const genId = crypto.randomUUID().slice(0, 8);
+  const overallTimeoutMs = 300_000; // 5 minutes for GPT Image 2
+
   console.log(
-    `[generate-video] OpenAI image request: model=${body.model} size=${body.size} quality=${body.quality} output_format=${body.output_format} compression=${body.output_compression} proxy=${proxyUrl ? "enabled" : "disabled"}`
+    `[generate-video] [${genId}] OpenAI image request started: model=${body.model} size=${body.size} quality=${body.quality} output_format=${body.output_format} compression=${body.output_compression} proxy=${proxyUrl ? "enabled" : "disabled"} timeout=${overallTimeoutMs}ms`
   );
 
   return new Promise<OpenAIImageResult>((resolve, reject) => {
+    // ── settled flag: ensure resolve/reject only called once ──────────
+    let settled = false;
+
+    function settle<T>(fn: (value: T | PromiseLike<T>) => void, val: T) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(overallTimeout);
+      fn(val);
+    }
+
+    // ── Overall timeout ──────────────────────────────────────────────
+    const overallTimeout = setTimeout(() => {
+      console.log(`[generate-video] [${genId}] timeout fired: ${overallTimeoutMs}ms exceeded`);
+      req.destroy(new Error(`OpenAI 请求超时（${overallTimeoutMs / 1000} 秒）`));
+    }, overallTimeoutMs);
+
     const options: https.RequestOptions = {
       method: "POST",
+      hostname: "api.openai.com",
+      path: "/v1/images/generations",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "Content-Length": Buffer.byteLength(bodyStr),
       },
-      timeout: 120000,
+      timeout: overallTimeoutMs,
     };
 
     if (proxyUrl) {
       options.agent = new SocksProxyAgent(proxyUrl);
     }
 
-    const req = https.request(
-      "https://api.openai.com/v1/images/generations",
-      options,
-      (res) => {
-        let data = "";
-        res.on("data", (chunk: string) => {
-          data += chunk;
+    const req = https.request(options, (res) => {
+      const contentLength = res.headers["content-length"]
+        ? parseInt(res.headers["content-length"], 10)
+        : null;
+
+      console.log(
+        `[generate-video] [${genId}] response statusCode=${res.statusCode} content-type=${res.headers["content-type"] ?? "N/A"} content-length=${contentLength ?? "N/A"}`
+      );
+
+      let data = "";
+      res.on("data", (chunk: string) => {
+        data += chunk;
+      });
+
+      // Handle response stream abort (proxy disconnect mid-stream, etc.)
+      res.on("aborted", () => {
+        const actualBytes = Buffer.byteLength(data, "utf8");
+        console.log(`[generate-video] [${genId}] res aborted. data so far: ${data.length} chars (${actualBytes} bytes)`);
+        if (data.length > 0) {
+          // Partial data received before abort → this is truncation
+          settle(
+            reject,
+            new Error(
+              `OpenAI 图片结果返回过程中被截断（传输中断），已接收 ${actualBytes} 字节但响应不完整。请检查代理稳定性。`
+            )
+          );
+        } else {
+          settle(
+            reject,
+            new Error("OpenAI 请求中断，请检查代理或重试")
+          );
+        }
+      });
+
+      res.on("error", (streamErr: Error) => {
+        const code = (streamErr as { code?: string }).code;
+        console.log(`[generate-video] [${genId}] res error: code=${code ?? "N/A"} message=${streamErr.message}`);
+        settle(
+          reject,
+          new Error(
+            /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ENETUNREACH|ECONNRESET|EPIPE/i.test(
+              code ?? streamErr.message
+            )
+              ? "OpenAI 请求中断，请检查代理或重试"
+              : streamErr.message
+          )
+        );
+      });
+
+      res.on("end", () => {
+        const actualBytes = Buffer.byteLength(data, "utf8");
+        console.log(
+          `[generate-video] [${genId}] response end: rawLength=${data.length} actualBytes=${actualBytes} contentLength=${contentLength ?? "N/A"}`
+        );
+
+        // ── Integrity check 1: content-length vs actual bytes ──────────
+        if (contentLength !== null && actualBytes < contentLength) {
+          console.log(
+            `[generate-video] [${genId}] TRUNCATED: content-length=${contentLength}, actual=${actualBytes}, missing=${contentLength - actualBytes} bytes`
+          );
+          settle(
+            reject,
+            new Error(
+              `OpenAI 图片结果返回过程中被截断：Content-Length 为 ${contentLength} 字节，实际仅收到 ${actualBytes} 字节，缺失 ${contentLength - actualBytes} 字节。请检查代理稳定性。`
+            )
+          );
+          return;
+        }
+
+        // ── Try JSON parse ───────────────────────────────────────────
+        let parsed: Record<string, unknown>;
+        try {
+          parsed = JSON.parse(data);
+        } catch {
+          const snippet = data.length > 200 ? data.slice(0, 200) + "..." : data;
+          console.log(
+            `[generate-video] [${genId}] JSON parse failed. data.length=${data.length} actualBytes=${actualBytes} contentLength=${contentLength}`
+          );
+          console.log(`[generate-video] [${genId}] First 200 chars: ${snippet}`);
+          settle(
+            reject,
+            new Error(
+              `OpenAI 返回的 JSON 数据解析失败（${actualBytes} 字节）—— 响应可能被截断或不完整。请检查代理稳定性。响应前 200 字符: ${snippet}`
+            )
+          );
+          return;
+        }
+
+        console.log(
+          `[generate-video] [${genId}] response body size: ${actualBytes} bytes, data keys: ${Object.keys(parsed).join(", ")}`
+        );
+
+        settle(resolve, {
+          ok: res.statusCode === 200,
+          status: res.statusCode ?? 500,
+          body: parsed,
         });
-        res.on("end", () => {
-          let parsed: Record<string, unknown>;
-          try {
-            parsed = JSON.parse(data);
-          } catch {
-            parsed = {};
-          }
-          resolve({
-            ok: res.statusCode === 200,
-            status: res.statusCode ?? 500,
-            body: parsed,
-          });
-        });
-      }
-    );
+      });
+    });
 
     req.on("timeout", () => {
-      req.destroy(new Error("socket hang up"));
+      console.log(`[generate-video] [${genId}] req timeout fired`);
+      settle(
+        reject,
+        new Error("OpenAI 请求超时，请检查代理或重试")
+      );
+      req.destroy();
     });
 
     req.on("error", (err: Error) => {
       const code = (err as { code?: string }).code;
-      if (
-        /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ENETUNREACH|ECONNRESET/i.test(
-          code ?? err.message
-        )
-      ) {
-        reject(
-          new Error(
-            "连接 OpenAI 失败，请检查 OPENAI_PROXY_URL 或网络代理"
+      console.log(`[generate-video] [${genId}] req error: code=${code ?? "N/A"} message=${err.message}`);
+      // If already settled (e.g., timeout fired destroy), do nothing
+      settle(
+        reject,
+        new Error(
+          /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|ENETUNREACH|ECONNRESET/i.test(
+            code ?? err.message
           )
-        );
-      } else {
-        reject(err);
-      }
+            ? "连接 OpenAI 失败，请检查代理或网络"
+            : err.message
+        )
+      );
     });
 
     req.write(bodyStr);
@@ -118,6 +231,9 @@ async function postOpenAIImageGeneration(
 }
 
 export async function POST(request: NextRequest) {
+  // Track if a generation record was created — used by outer catch to mark failed
+  let createdGenerationId: string | null = null;
+
   try {
     // ── Auth check ──────────────────────────────────────────────────────
     const authHeader = request.headers.get("Authorization");
@@ -242,6 +358,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Track for outer catch so it can mark failed if unexpected error occurs
+      createdGenerationId = generation.id;
+
+      console.log(
+        `[generate-video] [${displayName}] generation_id=${generation.id} prompt_length=${prompt.trim().length} model=${modelId} starting OpenAI request`
+      );
+
       // ── Call OpenAI images API ───────────────────────────────────────
       const openaiApiKey = process.env.OPENAI_API_KEY;
       if (!openaiApiKey) {
@@ -265,7 +388,9 @@ export async function POST(request: NextRequest) {
         `[generate-video] prompt optimize: enabled=${optimizedResult.enabled} rawLength=${optimizedResult.rawLength} optimizedLength=${optimizedResult.optimizedLength} model=${modelId}`
       );
 
+      // ── Attempt 1: compression=80 ──────────────────────────────────
       let openaiResult: OpenAIImageResult;
+      let usedCompression = 80;
       try {
         openaiResult = await postOpenAIImageGeneration({
           model: modelId,
@@ -273,24 +398,102 @@ export async function POST(request: NextRequest) {
           size,
           quality: "low",
           output_format: "webp",
-          output_compression: 80,
+          output_compression: usedCompression,
           n: 1,
         });
       } catch (fetchError) {
         const errorMsg =
           fetchError instanceof Error ? fetchError.message : "OpenAI 请求失败";
-        console.error("[generate-video] OpenAI fetch error:", errorMsg);
+        console.error("[generate-video] OpenAI fetch error (attempt 1):", errorMsg);
 
-        await adminClient
-          .from("generations")
-          .update({ status: "failed", error: errorMsg })
-          .eq("id", generation.id);
+        // ── Retry 1: compression=95 (smaller b64 payload) ────────────
+        if (
+          errorMsg.includes("截断") ||
+          errorMsg.includes("传输中断") ||
+          errorMsg.includes("解析失败")
+        ) {
+          console.log("[generate-video] Response truncated, retrying with higher compression (95)...");
+          try {
+            openaiResult = await postOpenAIImageGeneration({
+              model: modelId,
+              prompt: optimizedPrompt,
+              size,
+              quality: "low",
+              output_format: "webp",
+              output_compression: 95,
+              n: 1,
+            });
+            usedCompression = 95;
+            // Retry succeeded; fall through to process result
+            console.log("[generate-video] Retry with compression=95 succeeded");
+          } catch (retryError) {
+            const retryMsg =
+              retryError instanceof Error ? retryError.message : "OpenAI 请求失败";
+            console.error("[generate-video] Retry also failed:", retryMsg);
 
-        return Response.json(
-          { success: false, error: errorMsg },
-          { status: 500 }
-        );
+            // ── Retry 2: try with lower size (minimal) ──────────────
+            if (
+              retryMsg.includes("截断") ||
+              retryMsg.includes("传输中断") ||
+              retryMsg.includes("解析失败")
+            ) {
+              console.log("[generate-video] Retry still truncated, trying minimal size (1024x1024)...");
+              const minimalSize = "1024x1024";
+              try {
+                openaiResult = await postOpenAIImageGeneration({
+                  model: modelId,
+                  prompt: optimizedPrompt,
+                  size: minimalSize,
+                  quality: "low",
+                  output_format: "webp",
+                  output_compression: 95,
+                  n: 1,
+                });
+                usedCompression = 95;
+                console.log("[generate-video] Minimal retry succeeded");
+              } catch (minRetryErr) {
+                const minRetryMsg =
+                  minRetryErr instanceof Error ? minRetryErr.message : "OpenAI 请求失败";
+                console.error("[generate-video] Minimal retry also failed:", minRetryMsg);
+                await adminClient
+                  .from("generations")
+                  .update({ status: "failed", error: minRetryMsg })
+                  .eq("id", generation.id);
+                return Response.json(
+                  { success: false, error: minRetryMsg },
+                  { status: 500 }
+                );
+              }
+            } else {
+              await adminClient
+                .from("generations")
+                .update({ status: "failed", error: retryMsg })
+                .eq("id", generation.id);
+              return Response.json(
+                { success: false, error: retryMsg },
+                { status: 500 }
+              );
+            }
+          }
+        } else {
+          await adminClient
+            .from("generations")
+            .update({ status: "failed", error: errorMsg })
+            .eq("id", generation.id);
+          return Response.json(
+            { success: false, error: errorMsg },
+            { status: 500 }
+          );
+        }
       }
+const responseBodySize = JSON.stringify(openaiResult.body).length;
+console.log(
+  `[generate-video] OpenAI request succeeded for generation_id=${generation.id} status=${openaiResult.status} hasData=${openaiResult.body?.data ? "yes" : "no"}`
+);
+console.log(
+  `[generate-video] generation_id=${generation.id} requestMode=b64_json openaiStatusCode=${openaiResult.status} responseBodySize=${responseBodySize} bytes`
+);
+
 
       if (!openaiResult.ok) {
         let errorMsg = "OpenAI 图片生成失败";
@@ -339,8 +542,12 @@ export async function POST(request: NextRequest) {
 
       // ── Handle b64_json: save to local file ──────────────────────────
       if (imageData?.b64_json) {
+        const dataKeys = Object.keys(imageData).join(", ");
         console.log(
           `[generate-video] OpenAI returned b64_json, length: ${imageData.b64_json.length}`
+        );
+        console.log(
+          `[generate-video] generation_id=${generation.id} requestMode=b64_json finalDataKeys=[${dataKeys}] responseBodySize=${responseBodySize} bytes`
         );
 
         const fileName = `generation-${generation.id}.webp`;
@@ -357,7 +564,7 @@ export async function POST(request: NextRequest) {
           fs.mkdirSync(publicDir, { recursive: true });
           const imageBuffer = Buffer.from(imageData.b64_json, "base64");
           fs.writeFileSync(filePath, imageBuffer);
-          console.log(`[generate-video] Image saved successfully`);
+          console.log(`[generate-video] Image saved successfully: path=${filePath} size=${imageBuffer.length} bytes`);
         } catch (saveError) {
           const errorMsg = "图片保存失败，请重试";
           console.error(`[generate-video] Failed to save image file:`, saveError);
@@ -439,8 +646,9 @@ export async function POST(request: NextRequest) {
             .update({ charged_at: new Date().toISOString() })
             .eq("id", generation.id);
         }
+console.log(`[generate-video] DB update succeeded for generation_id=${generation.id}`);
+console.log(`[generate-video] ${displayName} generation succeeded: url=${shortUrl}`);
 
-        console.log(`[generate-video] ${displayName} generation succeeded: ${shortUrl}`);
 
         return Response.json({
           success: true,
@@ -455,7 +663,36 @@ export async function POST(request: NextRequest) {
         console.log(`[generate-video] OpenAI returned url directly: ${imageData.url}`);
         const outputUrl = imageData.url;
 
-        // ── Deduct credits ──────────────────────────────────────────
+        // ── Update generation record as succeeded FIRST ─────────────
+        const { error: updateError } = await adminClient
+          .from("generations")
+          .update({
+            status: "succeeded",
+            video_url: outputUrl,
+            cover_url: outputUrl,
+          })
+          .eq("id", generation.id);
+
+        if (updateError) {
+          console.error(
+            "[generate-video] Failed to update generation record (url branch):",
+            updateError
+          );
+
+          await adminClient
+            .from("generations")
+            .update({ status: "failed", error: "更新生成记录失败" })
+            .eq("id", generation.id);
+
+          return Response.json(
+            { success: false, error: "更新生成记录失败" },
+            { status: 500 }
+          );
+        }
+
+        console.log(`[generate-video] DB updated succeeded for generation_id=${generation.id}`);
+
+        // ── Deduct credits (only after DB update succeeds) ──────────
         const { data: currentProfile } = await adminClient
           .from("profiles")
           .select("credits")
@@ -478,24 +715,15 @@ export async function POST(request: NextRequest) {
             generation_id: generation.id,
             description: `${displayName} 图片生成扣费`,
           });
+
+          // Update charged_at after successful deduction
+          await adminClient
+            .from("generations")
+            .update({ charged_at: new Date().toISOString() })
+            .eq("id", generation.id);
         }
 
-        const { error: updateError } = await adminClient
-          .from("generations")
-          .update({
-            status: "succeeded",
-            video_url: outputUrl,
-            cover_url: outputUrl,
-            charged_at: new Date().toISOString(),
-          })
-          .eq("id", generation.id);
-
-        if (updateError) {
-          console.error(
-            "[generate-video] Failed to update generation record:",
-            updateError
-          );
-        }
+        console.log(`[generate-video] ${displayName} generation succeeded: ${outputUrl}`);
 
         return Response.json({
           success: true,
@@ -559,11 +787,16 @@ export async function POST(request: NextRequest) {
     const useAudioMusic = audioMusic === true;
     const generateAudio = useAudioSfx || useAudioMusic;
 
+    // Map quality to resolution
+    const qualityValue = quality ?? "标准";
+    const resolutionValue = qualityValue === "超清" ? "1080p" : "720p";
+
     // Build settings object for generation record
     const generationSettings: Record<string, unknown> = {
       aspectRatio: aspectRatio ?? "16:9",
       duration: duration ?? 10,
-      quality: quality ?? "标准",
+      quality: qualityValue,
+      resolution: resolutionValue,
       style: style ?? "真实质感",
     };
     // Record reference image info (not the full data URL)
@@ -600,11 +833,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Track for outer catch
+    createdGenerationId = generation.id;
+
     // ── Submit to Seedance API ──────────────────────────────────────────
     const result = await submitVideoGeneration({
       prompt: prompt.trim(),
       aspectRatio,
       duration,
+      quality: qualityValue,
       generateAudio,
       audioSfx: useAudioSfx,
       audioMusic: useAudioMusic,
@@ -630,7 +867,32 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "An unknown error occurred";
-    console.error("[generate-video] Error:", message);
+    console.error("[generate-video] Unhandled error:", message);
+
+    // CRITICAL FIX: If a generation record was already created, update it to failed
+    // so the task doesn't remain stuck in "running" forever.
+    if (createdGenerationId) {
+      try {
+        const adminClient = createAdminSupabaseClient();
+        await adminClient
+          .from("generations")
+          .update({
+            status: "failed",
+            error: `生成异常中断: ${message}`,
+          })
+          .eq("id", createdGenerationId);
+
+        console.log(
+          `[generate-video] Generation ${createdGenerationId} marked as failed due to unhandled error`
+        );
+      } catch (dbError) {
+        console.error(
+          "[generate-video] Failed to mark generation as failed in catch block:",
+          dbError
+        );
+      }
+    }
+
     return Response.json(
       { success: false, error: message },
       { status: 500 }

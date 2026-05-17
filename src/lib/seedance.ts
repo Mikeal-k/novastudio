@@ -41,6 +41,8 @@ export interface SeedanceSubmitRequest {
   aspectRatio?: string;
   /** Duration in seconds: 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, or 15 */
   duration?: number;
+  /** Quality level: "标准", "高清", "超清" — used to determine resolution */
+  quality?: string;
   /** Whether to generate audio (AI sound effects + background music) */
   generateAudio?: boolean;
   /** Enable AI sound effects (环境声、动作声、机械声等) */
@@ -121,6 +123,21 @@ function mapAspectRatio(ratio: string): string {
   if (valid.includes(ratio)) return ratio;
   // Default to 16:9 if unknown
   return "16:9";
+}
+
+/**
+ * Map our frontend quality/clarity value to Seedance API resolution.
+ *
+ * Mapping rules:
+ *   "标准" (standard)  → "720p"
+ *   "高清" (hd)        → "720p"
+ *   "超清" (ultra)     → "1080p"
+ *
+ * Falls back to "720p" for unknown values.
+ */
+function mapResolution(quality?: string): string {
+  if (quality === "超清") return "1080p";
+  return "720p";
 }
 
 /**
@@ -292,9 +309,12 @@ export async function submitVideoGeneration(
     });
   }
 
+  const resolution = mapResolution(request.quality);
+
   const body: Record<string, unknown> = {
     model,
     content,
+    resolution,
   };
 
   // Add generate_audio flag when audio features are enabled
@@ -339,6 +359,85 @@ export async function submitVideoGeneration(
 }
 
 /**
+ * Helper: extract a string URL from a value that could be:
+ * - A string (direct URL)
+ * - An object with a `url` property: { url: "https://..." }
+ * - null / undefined
+ */
+function extractUrl(value: unknown): string | undefined {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (value && typeof value === "object" && "url" in value) {
+    const url = (value as { url: unknown }).url;
+    if (typeof url === "string" && url.length > 0) return url;
+  }
+  return undefined;
+}
+
+/**
+ * Helper: extract video_url and cover_url from the Seedance API response's
+ * `content` field, which may be EITHER:
+ *
+ *   Object format:
+ *     { "video_url": "...", "cover_url": "..." }
+ *
+ *   Array format (Volcengine Ark standard):
+ *     [
+ *       { "content_type": "video", "video_url": { "url": "...", "url_expire_at": 123 } },
+ *       { "content_type": "video", "video_url": "..." }
+ *     ]
+ *
+ *   Or any nested variation thereof.
+ */
+function extractContentUrls(
+  content: unknown
+): { video_url?: string; cover_url?: string } {
+  const result: { video_url?: string; cover_url?: string } = {};
+
+  if (!content) return result;
+
+  // Case 1: content is a plain object with video_url / cover_url keys
+  if (!Array.isArray(content) && typeof content === "object") {
+    const obj = content as Record<string, unknown>;
+    const vu = extractUrl(obj.video_url);
+    if (vu) result.video_url = vu;
+    const cu = extractUrl(obj.cover_url);
+    if (cu) result.cover_url = cu;
+    return result;
+  }
+
+  // Case 2: content is an array — iterate items and find video / cover
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (!item || typeof item !== "object") continue;
+      const obj = item as Record<string, unknown>;
+      const contentType =
+        String(obj.content_type ?? obj.type ?? "").toLowerCase();
+
+      // If this item is a "video" type, try to extract video_url
+      if (contentType === "video") {
+        const vu = extractUrl(obj.video_url ?? obj.url);
+        if (vu && !result.video_url) result.video_url = vu;
+        const cu = extractUrl(obj.cover_url);
+        if (cu && !result.cover_url) result.cover_url = cu;
+      }
+
+      // Also check top-level item keys as a fallback
+      if (!result.video_url) {
+        const vu = extractUrl(obj.video_url ?? obj.url);
+        if (vu) result.video_url = vu;
+      }
+      if (!result.cover_url) {
+        const cu = extractUrl(obj.cover_url);
+        if (cu) result.cover_url = cu;
+      }
+    }
+    return result;
+  }
+
+  return result;
+}
+
+/**
  * Query the status of a video generation task.
  *
  * GET {ARK_BASE_URL}/contents/generations/tasks/{taskId}
@@ -347,9 +446,7 @@ export async function submitVideoGeneration(
  *   {
  *     "model": "...",
  *     "status": "running" | "succeeded" | "failed" | ...,
- *     "content": {
- *       "video_url": "..."
- *     }
+ *     "content": { "video_url": "..." } | [ { "content_type": "video", "video_url": ... } ]
  *   }
  */
 export async function queryVideoTask(
@@ -399,10 +496,15 @@ export async function queryVideoTask(
       break;
   }
 
-  // Build result object from response.content
+  // Extract video/cover URLs from content (handles both object and array formats)
+  const urls = extractContentUrls(data.content);
+  console.log(
+    `[seedance] Extracted URLs -> video_url=${urls.video_url ?? "(none)"} cover_url=${urls.cover_url ?? "(none)"}`
+  );
+
   const result: SeedanceTaskResult = {
-    video_url: data.content?.video_url ?? undefined,
-    cover_url: data.content?.cover_url ?? undefined,
+    video_url: urls.video_url,
+    cover_url: urls.cover_url,
   };
 
   return {

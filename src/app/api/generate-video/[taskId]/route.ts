@@ -99,37 +99,63 @@ export async function GET(
         const tempVideoUrl = result.result?.video_url ?? null;
         const tempCoverUrl = result.result?.cover_url ?? null;
 
+        console.log(
+          `[seedance/query] Task ${taskId} succeeded. ` +
+          `tempVideoUrl=${tempVideoUrl ?? "(null)"} ` +
+          `tempCoverUrl=${tempCoverUrl ?? "(null)"}`
+        );
+
+        // ── If Seedance didn't return a video URL, mark as failed ────
+        if (!tempVideoUrl) {
+          console.error(
+            `[seedance/query] Task ${taskId} succeeded but no video_url in response. ` +
+            `Content: ${JSON.stringify(result)}`
+          );
+          await adminClient
+            .from("generations")
+            .update({
+              status: "failed",
+              error: "视频地址未就绪，请重新生成或联系客服",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", generation.id);
+
+          return Response.json({
+            success: false,
+            status: "failed",
+            error: "视频地址未就绪，请重新生成或联系客服",
+          });
+        }
+
         // ── Download video and cover to local storage ──────────────────
         let localVideoUrl: string | null = null;
         let localCoverUrl: string | null = null;
         let downloadFailed = false;
 
-        if (tempVideoUrl) {
-          try {
-            const fileName = `generation-${generation.id}.mp4`;
-            const relativeDir = "generated/seedance";
-            const publicDir = path.join(process.cwd(), "public", relativeDir);
-            const filePath = path.join(publicDir, fileName);
+        try {
+          const fileName = `generation-${generation.id}.mp4`;
+          const relativeDir = "generated/seedance";
+          const publicDir = path.join(process.cwd(), "public", relativeDir);
+          const filePath = path.join(publicDir, fileName);
 
-            console.log(`[seedance/query] Downloading video from: ${tempVideoUrl}`);
-            console.log(`[seedance/query] Saving to: ${filePath}`);
+          console.log(`[seedance/query] Downloading video from: ${tempVideoUrl}`);
+          console.log(`[seedance/query] Saving to: ${filePath}`);
 
-            fs.mkdirSync(publicDir, { recursive: true });
+          fs.mkdirSync(publicDir, { recursive: true });
 
-            const response = await fetch(tempVideoUrl);
-            if (!response.ok) {
-              throw new Error(`Failed to download video: HTTP ${response.status}`);
-            }
-
-            const arrayBuffer = await response.arrayBuffer();
-            fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
-
-            localVideoUrl = `/${relativeDir}/${fileName}`;
-            console.log(`[seedance/query] Video saved: ${localVideoUrl}`);
-          } catch (downloadErr) {
-            console.error(`[seedance/query] Failed to download video:`, downloadErr);
-            downloadFailed = true;
+          const response = await fetch(tempVideoUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to download video: HTTP ${response.status}`);
           }
+
+          const arrayBuffer = await response.arrayBuffer();
+          fs.writeFileSync(filePath, Buffer.from(arrayBuffer));
+
+          localVideoUrl = `/${relativeDir}/${fileName}`;
+          console.log(`[seedance/query] Video saved: ${localVideoUrl}`);
+        } catch (downloadErr) {
+          console.error(`[seedance/query] Failed to download video from ${tempVideoUrl}:`, downloadErr);
+          downloadFailed = true;
         }
 
         if (tempCoverUrl && !downloadFailed) {
@@ -161,29 +187,32 @@ export async function GET(
           }
         }
 
-        // ── If download failed, mark as failed — do NOT deduct credits ─
+        // ── If video download failed, try using tempVideoUrl directly ──
+        // (User can still download from Seedance CDN even if local save failed)
         if (downloadFailed) {
-          await adminClient
-            .from("generations")
-            .update({
-              status: "failed",
-              error: "视频保存失败，请重新生成",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", generation.id);
-
-          return Response.json({
-            success: true,
-            status: "failed",
-            error: "视频保存失败，请重新生成",
-          });
+          console.warn(
+            `[seedance/query] Local video save failed for task ${taskId}. ` +
+            `Falling back to Seedance temp URL: ${tempVideoUrl}`
+          );
         }
 
         // ── Update generation record ───────────────────────────────────
+        // Priority: localVideoUrl > tempVideoUrl (Seedance CDN)
+        // NEVER fall back to cover_url or reference image URL for video_url
+        const finalVideoUrl = localVideoUrl || (downloadFailed ? tempVideoUrl : tempVideoUrl);
+        const finalCoverUrl = localCoverUrl || tempCoverUrl;
+
+        console.log(
+          `[seedance/query] Saving to DB -> ` +
+          `video_url=${finalVideoUrl ?? "(null)"} ` +
+          `cover_url=${finalCoverUrl ?? "(null)"} ` +
+          `downloadFailed=${downloadFailed}`
+        );
+
         const updates: Record<string, unknown> = {
           status: "succeeded",
-          video_url: localVideoUrl || tempVideoUrl,
-          cover_url: localCoverUrl || tempCoverUrl,
+          video_url: finalVideoUrl,
+          cover_url: finalCoverUrl,
           updated_at: new Date().toISOString(),
         };
 
@@ -219,6 +248,15 @@ export async function GET(
           }
         }
 
+        // ── Clean up reference image markers from settings (Bug 3 fix) ──────
+        const currentSettings = generation.settings || {};
+        if (currentSettings.hasReferenceImage || currentSettings.referenceImageMode) {
+          const cleanedSettings = { ...currentSettings };
+          delete cleanedSettings.hasReferenceImage;
+          delete cleanedSettings.referenceImageMode;
+          updates.settings = cleanedSettings;
+        }
+
         await adminClient
           .from("generations")
           .update(updates)
@@ -234,14 +272,25 @@ export async function GET(
 
       case "failed":
       case "canceled": {
+        // ── Clean up reference image markers from settings (Bug 3 fix) ──────
+        const currentSettings: Record<string, unknown> = generation.settings || {};
+        const hasRefMarkers = Boolean(currentSettings.hasReferenceImage || currentSettings.referenceImageMode);
+        const failUpdates: Record<string, unknown> = {
+          status: "failed",
+          error: result.error ?? "Video generation failed",
+          updated_at: new Date().toISOString(),
+        };
+        if (hasRefMarkers) {
+          const cleaned: Record<string, unknown> = { ...currentSettings };
+          delete cleaned.hasReferenceImage;
+          delete cleaned.referenceImageMode;
+          failUpdates.settings = cleaned;
+        }
+
         // Update status to failed — do NOT deduct credits
         await adminClient
           .from("generations")
-          .update({
-            status: "failed",
-            error: result.error ?? "Video generation failed",
-            updated_at: new Date().toISOString(),
-          })
+          .update(failUpdates)
           .eq("id", generation.id);
 
         return Response.json({

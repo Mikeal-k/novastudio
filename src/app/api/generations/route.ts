@@ -58,6 +58,9 @@ export async function GET(request: NextRequest) {
         publicCategory: item.public_category ?? null,
         publishedAt: item.published_at ?? null,
         likesCount: item.likes_count ?? 0,
+
+        // Ensure settings is always passed through
+        settings: item.settings ?? null,
       })),
     });
   } catch (error) {

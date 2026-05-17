@@ -153,6 +153,120 @@ interface DBGeneration {
   publishedAt?: string | null;
   likesCount?: number;
   taskId?: string | null;
+  settings?: Record<string, unknown> | null;
+}
+
+// ─── Image model ID to display name mapping ─────────────────────────────────
+
+const MODEL_DISPLAY_NAMES: Record<string, string> = {
+  "gpt-image-1.5": "GPT Image 1.5",
+  "gpt-image-2": "GPT Image 2",
+  "seedance-2": "Seedance 2.0",
+};
+
+const MODEL_ID_BY_DISPLAY_NAME: Record<string, string> = {};
+for (const [id, name] of Object.entries(MODEL_DISPLAY_NAMES)) {
+  MODEL_ID_BY_DISPLAY_NAME[name] = id;
+}
+
+// ─── Hydrate generation form from a historical task (Bug 1 fix) ─────────────
+
+function hydrateGenerationFormFromTask(
+  task: DBGeneration,
+  setters: {
+    setPrompt: (v: string) => void;
+    setSelectedModelId: (v: string) => void;
+    setAspectRatio: (v: string) => void;
+    setVideoDuration: (v: number) => void;
+    setSelectedClarity: (v: string) => void;
+    setSelectedStyle: (v: string) => void;
+    setAudioSfx: (v: boolean) => void;
+    setAudioMusic: (v: boolean) => void;
+  }
+): void {
+  const {
+    setPrompt,
+    setSelectedModelId,
+    setAspectRatio,
+    setVideoDuration,
+    setSelectedClarity,
+    setSelectedStyle,
+    setAudioSfx,
+    setAudioMusic,
+  } = setters;
+
+  // 1. Restore prompt
+  setPrompt(task.prompt || "");
+
+  // 2. Restore model — try to match by display name first, then use model id directly
+  const modelId = MODEL_ID_BY_DISPLAY_NAME[task.model] || task.model;
+  setSelectedModelId(modelId);
+
+  // 3. Restore settings if present
+  const settings = task.settings;
+  if (settings && typeof settings === "object") {
+    if (typeof settings.aspectRatio === "string") {
+      setAspectRatio(settings.aspectRatio);
+    }
+    if (typeof settings.duration === "number") {
+      setVideoDuration(settings.duration);
+    }
+    if (typeof settings.quality === "string") {
+      setSelectedClarity(settings.quality);
+    }
+    if (typeof settings.style === "string") {
+      setSelectedStyle(settings.style);
+    }
+    if (typeof settings.audioSfx === "boolean") {
+      setAudioSfx(settings.audioSfx);
+    }
+    if (typeof settings.audioMusic === "boolean") {
+      setAudioMusic(settings.audioMusic);
+    }
+  }
+}
+
+// ─── Preview / Download URL helpers (Bug 2 fix) ────────────────────────────
+
+/**
+ * Return the best URL for previewing a generation result.
+ * - For video tasks: returns video_url.
+ * - For image tasks: returns cover_url / video_url.
+ * Never returns reference image URLs.
+ */
+function getPreviewUrl(task: DBGeneration): string | null {
+  if (task.output_type === "video") {
+    return task.video_url || null;
+  }
+  return task.cover_url || task.video_url || null;
+}
+
+/**
+ * Return the best URL for downloading a generation result.
+ * - For video tasks: returns video_url ONLY. Never falls back to cover_url or reference image.
+ * - For image tasks: returns cover_url / video_url.
+ * Never returns reference image URLs.
+ */
+function getDownloadUrl(task: DBGeneration): string | null {
+  if (task.output_type === "video") {
+    // Video downloads MUST use video_url — never cover_url or reference image URL
+    return task.video_url || null;
+  }
+  return task.cover_url || task.video_url || null;
+}
+
+/**
+ * Debug helper: log key fields for a generation before download.
+ * Useful for verifying the video_url chain end-to-end.
+ */
+function debugLogGeneration(task: DBGeneration): void {
+  if (process.env.NODE_ENV === "development") {
+    console.log(
+      `[download-debug] id=${task.id} model=${task.model} output_type=${task.output_type} ` +
+      `video_url=${task.video_url ?? "(null)"} cover_url=${task.cover_url ?? "(null)"} ` +
+      `downloadUrl=${getDownloadUrl(task) ?? "(null)"}`
+    );
+  }
 }
 
 // ─── Video Preview Modal ─────────────────────────────────────────────────────
@@ -1290,6 +1404,22 @@ function CreatePageContent() {
     }
   }, [getToken]);
 
+  // ── Clear reference image state (Bug 3 fix) ──────────────────────────────
+
+  const clearReferenceImageState = useCallback(() => {
+    // Revoke all object URLs to prevent memory leaks
+    setReferenceImages((prev) => {
+      prev.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      return [];
+    });
+    // Clear error message
+    setRefImageError("");
+    // Clear hidden file input value via ref
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
   // ── Refresh a single Seedance task status ────────────────────────────────
 
   const handleRefreshTaskStatus = useCallback(
@@ -1313,9 +1443,18 @@ function CreatePageContent() {
         const data = await res.json();
 
         if (data.status === "succeeded" || data.success === true) {
+          console.log(
+            `[create] Task ${taskId} succeeded. ` +
+            `responseVideoUrl=${data.videoUrl ?? "(null)"} ` +
+            `responseCoverUrl=${data.coverUrl ?? "(null)"}`
+          );
+          // ── Clear reference image from UI (Bug 3 fix) ─────────────
+          clearReferenceImageState();
           setToastMessage({ type: "success", text: "视频生成成功！" });
           await refreshGenerations();
         } else if (data.status === "failed") {
+          // ── Clear reference image from UI (Bug 3 fix) ─────────────
+          clearReferenceImageState();
           setToastMessage({
             type: "error",
             text: data.error || "视频生成失败",
@@ -1341,7 +1480,7 @@ function CreatePageContent() {
         });
       }
     },
-    [getToken, refreshGenerations]
+    [getToken, refreshGenerations, clearReferenceImageState]
   );
 
   // ── Auto-check running Seedance tasks once after generations load ────────
@@ -1449,6 +1588,9 @@ function CreatePageContent() {
                 pollingRef.current = null;
               }
 
+              // ── Clear reference image from UI (Bug 3 fix) ─────────────
+              clearReferenceImageState();
+
               // Refresh credits from server (deduction happened server-side)
               await refreshCredits();
               // Refresh generations from server
@@ -1469,6 +1611,8 @@ function CreatePageContent() {
                 clearInterval(pollingRef.current);
                 pollingRef.current = null;
               }
+              // ── Clear reference image from UI (Bug 3 fix) ─────────────
+              clearReferenceImageState();
               setIsGenerating(false);
               // Do NOT deduct credits on failure
               setGenerationError(pollData.error || "视频生成失败，请重试");
@@ -1481,6 +1625,8 @@ function CreatePageContent() {
               clearInterval(pollingRef.current);
               pollingRef.current = null;
             }
+            // ── Clear reference image from UI (Bug 3 fix) ─────────────
+            clearReferenceImageState();
             setIsGenerating(false);
             setGenerationError(
               pollErr instanceof Error ? pollErr.message : "查询任务状态失败"
@@ -1494,6 +1640,8 @@ function CreatePageContent() {
         // Also poll immediately
         await poll();
       } catch (err) {
+        // ── Clear reference image from UI (Bug 3 fix) ─────────────
+        clearReferenceImageState();
         setIsGenerating(false);
         setGenerationError(
           err instanceof Error ? err.message : "提交视频生成任务失败"
@@ -1512,6 +1660,7 @@ function CreatePageContent() {
       audioSfx,
       audioMusic,
       referenceImages,
+      clearReferenceImageState,
     ]
   );
 
@@ -2621,6 +2770,16 @@ function CreatePageContent() {
                     </button>
                   ))}
                 </div>
+                {/* Resolution hint — only for Seedance 2.0 */}
+                {selectedModel.id === "seedance-2" && (
+                  <p className="mt-1.5 text-[10px] text-text-muted/70 leading-relaxed">
+                    {selectedClarity === "标准" && "标准 · 720p"}
+                    {selectedClarity === "高清" && "高清 · 720p"}
+                    {selectedClarity === "超清" && "超清 · 1080p"}
+                    <br />
+                    清晰度会影响生成耗时，超清可能更慢。
+                  </p>
+                )}
               </div>
 
               {/* Video Duration (video models only) */}
@@ -2846,63 +3005,89 @@ function CreatePageContent() {
                           />
                           {refreshingTaskIds.has(gen.taskId) ? "查询中..." : "刷新状态"}
                         </button>
-                      ) : gen.cover_url && gen.output_type === "image" ? (
-                        <>
-                          <button
-                            onClick={() => setPreviewImageUrl(gen.cover_url!)}
-                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                          >
-                            <ImageIcon className="h-3 w-3" />
-                            预览
-                          </button>
-                          <a
-                            href={gen.cover_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            download={gen.prompt ? `${gen.prompt.slice(0, 30)}.png` : "image.png"}
-                            className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                          >
-                            <Download className="h-3 w-3" />
-                            下载
-                          </a>
-                        </>
-                      ) : gen.video_url ? (
-                        gen.model === "Seedance 2.0" && !gen.video_url.startsWith("/") ? (
-                          /* Old expired Seedance URL — cannot preview/download */
-                          <span className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-amber-400/70">
-                            <AlertCircle className="h-3 w-3" />
-                            视频链接已过期，请再次生成
-                          </span>
-                        ) : (
-                          <>
-                            <button
-                              onClick={() => setPreviewVideoUrl(gen.video_url!)}
-                              className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                            >
-                              <Play className="h-3 w-3" />
-                              预览
-                            </button>
-                            <a
-                              href={gen.video_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              download
-                              className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
-                            >
-                              <Download className="h-3 w-3" />
-                              下载
-                            </a>
-                          </>
-                        )
-                      ) : gen.status !== "running" && gen.status !== "pending" ? (
-                        <span className="text-[10px] text-text-muted">{gen.error || "等待生成"}</span>
-                      ) : null}
+                      ) : (() => {
+                        const previewUrl = getPreviewUrl(gen);
+                        const downloadUrl = getDownloadUrl(gen);
+                        // Image task with cover_url
+                        if (gen.output_type === "image" && previewUrl) {
+                          return (
+                            <>
+                              <button
+                                onClick={() => setPreviewImageUrl(previewUrl)}
+                                className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                              >
+                                <ImageIcon className="h-3 w-3" />
+                                预览
+                              </button>
+                              <a
+                                href={downloadUrl || "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download={gen.prompt ? `${gen.prompt.slice(0, 30)}.png` : "image.png"}
+                                onClick={() => { debugLogGeneration(gen); }}
+                                className={cn(
+                                  "flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light",
+                                  !downloadUrl && "pointer-events-none opacity-40"
+                                )}
+                              >
+                                <Download className="h-3 w-3" />
+                                下载
+                              </a>
+                            </>
+                          );
+                        }
+                        // Video task with video_url
+                        if (gen.output_type === "video" && downloadUrl) {
+                          // WARNING: Do NOT reject external URLs as "expired" just because
+                          // they don't start with "/". Seedance CDN URLs (https://...) are
+                          // valid video URLs that may be used if local download failed.
+                          return (
+                            <>
+                              <button
+                                onClick={() => {
+                                  // ── Debug log: verify video_url before preview ──
+                                  debugLogGeneration(gen);
+                                  setPreviewVideoUrl(downloadUrl);
+                                }}
+                                className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                              >
+                                <Play className="h-3 w-3" />
+                                预览
+                              </button>
+                              <a
+                                href={downloadUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                download
+                                className="flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-text-muted transition-colors hover:bg-accent-violet/10 hover:text-accent-violet-light"
+                              >
+                                <Download className="h-3 w-3" />
+                                下载
+                              </a>
+                            </>
+                          );
+                        }
+                        // No valid URL — show error or status
+                        if (gen.status !== "running" && gen.status !== "pending") {
+                          return <span className="text-[10px] text-text-muted">{gen.error || "等待生成"}</span>;
+                        }
+                        return null;
+                      })()}
                       {/* Only show "再次生成" for non-running items or non-Seedance items */}
                       {(gen.status !== "running" && gen.status !== "pending") ||
                       gen.model !== "Seedance 2.0" ? (
                         <button
                           onClick={() => {
-                            setPrompt(gen.prompt);
+                            hydrateGenerationFormFromTask(gen, {
+                              setPrompt,
+                              setSelectedModelId,
+                              setAspectRatio,
+                              setVideoDuration,
+                              setSelectedClarity,
+                              setSelectedStyle,
+                              setAudioSfx,
+                              setAudioMusic,
+                            });
                             requestAnimationFrame(() => {
                               window.scrollTo({ top: 0, behavior: "smooth" });
                               promptInputRef.current?.focus();
